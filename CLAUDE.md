@@ -10,7 +10,7 @@ The product being designed and built is the **QA Automation Platform**: a multi-
 
 ## Current state: monorepo scaffolded, no domain code yet
 
-The repo structure decided in [ADR 0010](docs/adr/0010-monorepo-layout.md) exists: `apps/web` (Next.js placeholder), `apps/api` (NestJS, one `GET /health` endpoint), `apps/worker` and `packages/shared-types`/`packages/reporting` (empty placeholders), `packages/config` (shared tsconfig/ESLint base), and `prisma/schema.prisma` (datasource + generator only, zero models). No domain tables, no Postgres/Docker setup yet (ADR 0003/0007 — next change), no auth wiring. CI runs install/lint/typecheck on every push/PR touching this folder, via `railgun-qa-platform/.github/workflows/ci.yml` (see the OpenSpec section below for why it lives at the repo root).
+The repo structure decided in [ADR 0010](docs/adr/0010-monorepo-layout.md) exists: `apps/web` (Next.js placeholder), `apps/api` (NestJS, one `GET /health` endpoint), `apps/worker` and `packages/shared-types`/`packages/reporting` (empty placeholders), `packages/config` (shared tsconfig/ESLint base), and `prisma/schema.prisma` (datasource + generator only, zero models). No domain tables, no Postgres/Docker setup yet (ADR 0003/0007 — next change), no auth wiring. CI runs install/lint/typecheck on every push/PR, via `.github/workflows/ci.yml`.
 
 **Commands** (run from `finalproject-GR/`):
 - `npm install` — installs every workspace.
@@ -54,13 +54,9 @@ The API enqueues jobs only through `enqueue_job(task, payload, run_at)` inside i
 - **Postgres must be ≥ 15** (docker-compose runs 16) — as of `execution-lifecycle`, migration `0008` uses `ON DELETE SET NULL (column)` on composite tenant FKs, which clears only the referenced id and keeps `workspace_id` intact. Keep this in mind when hosting (open-questions.md E1–E4) is chosen.
 - **Node must be ≥ 22.18** as of `background-jobs`: `graphile-worker` 0.18 requires it, and CI runs Node 22. It is ESM-only and is loaded from CommonJS code through Node's `require(esm)`.
 
-## OpenSpec setup — note the folder-hierarchy split
+## OpenSpec setup
 
-This project uses [OpenSpec](https://github.com/Fission-AI/OpenSpec) (`openspec` CLI) for spec-driven change proposals, via the `/opsx:*` slash commands. Because `finalproject-GR` is **not** the VS Code workspace root (`railgun-qa-platform` is), two things live in different places on purpose:
-
-- **`.claude/commands/` and `.claude/skills/`** live at the repo root (`railgun-qa-platform/.claude/`), one level above this folder — Claude Code only discovers project slash commands relative to the opened workspace root, not arbitrary subfolders, so they have to be there to show up.
-- **`openspec/` (the actual specs/changes data) and `openspec/config.yaml`** live here, in `finalproject-GR/openspec/`, where they semantically belong. The `openspec` CLI only searches *upward* from the current directory for the nearest `openspec/` root, so running it from the repo root (or anywhere outside this folder) fails with "No OpenSpec root found" unless you point it at this project explicitly.
-- This project is registered as **store id `railgun-qa-gr`** (`openspec store list --json` shows it) so it resolves from anywhere: pass `--store railgun-qa-gr` on `openspec` commands run with a cwd outside `finalproject-GR`, or just `cd finalproject-GR` first. The `/opsx:*` command workflows already check for a registered store when `openspec context` fails from the current directory — this is why the store exists, not just a convenience.
+This project uses [OpenSpec](https://github.com/Fission-AI/OpenSpec) (`openspec` CLI) for spec-driven change proposals, via the `/opsx:*` slash commands in `.claude/commands/` and `.claude/skills/`. Specs and changes live in `openspec/`, with `openspec/config.yaml`; run `openspec` commands from the repository root. (Until the final submission the project lived in a `finalproject-GR/` subfolder of the course fork, which is why older ADRs and archived changes mention that path and a registered store id `railgun-qa-gr`.)
 
 ## Working documents — read these, don't duplicate them
 
