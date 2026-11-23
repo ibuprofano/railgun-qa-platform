@@ -35,6 +35,7 @@ All three had to be fixed before the `execution-lifecycle` OpenSpec change (road
 - The automatic Completed transition is driven by the run-outcome write, so outcome writes are serialized per execution with a row lock to make concurrent "last outcome" writes complete reliably. Writes are human-paced, so contention is negligible.
 - Writing a test case and running it immediately takes one extra step: setting its status to Ready. The Slice 2 picker shows only Ready test cases.
 - Cancel and Try Again (and open question G7) are still undecided. The `Canceled` status exists in the schema but no transition reaches it yet.
+  *Update (2026-11-23):* decided in [ADR 0019](0019-execution-cancel.md) (Cancel) and [ADR 0020](0020-execution-try-again.md) (Try Again, resolving G7).
 
 ## Revisit Triggers
 

@@ -23,8 +23,20 @@ import type { AuthenticatedRequest } from '../common/clerk-auth.guard';
 import { isUuid } from '../executions/execution-input';
 import { type ExecutionActor, loadActorDisplayName } from '../executions/execution-queries';
 import { type BugSeverity, type BugStatus, failedStepOf, parseBugCreate, parseBugUpdate } from './bug-rules';
-import { type BugResponse, listBugs, loadBug, loadStartedRun, logBugActivity } from './bug-queries';
+import { type BugResponse, linkedRunOf, listBugs, loadBug, loadStartedRun, logBugActivity } from './bug-queries';
 import { projectTags, setItemTags } from '../tags/tag-queries';
+import { emitRunBugsChanged } from '../realtime/live-event';
+import { listBugHistory } from '../common/activity-log-reader';
+import { type ActivityHistoryResponse, parseHistoryCursor, toHistoryResponse } from '../common/activity-history';
+import type { Prisma } from '@prisma/client';
+
+/** Tells open streams that a run's linked bugs changed, when the bug has a run (specs/live-updates). */
+async function announceLinkedRun(tx: Prisma.TransactionClient, actor: ExecutionActor, bugId: string): Promise<void> {
+  const linked = await linkedRunOf(tx, bugId);
+  if (linked) {
+    await emitRunBugsChanged(tx, actor, linked.executionId, linked.runId);
+  }
+}
 
 /** Bugs (specs/bug-tracking). Auto-creation on Fail lives in ExecutionLifecycleController. */
 @Controller('projects/:projectId/bugs')
@@ -66,13 +78,13 @@ export class BugsController {
         INSERT INTO bug (
           project_id, workspace_id, title, severity, description, steps_to_reproduce,
           test_run_id, test_case_id, test_case_name_snapshot, gherkin_snapshot, failed_step_snapshot,
-          reporter_id, reporter_display_name
+          reporter_id, reporter_display_name, attempt
         ) VALUES (
           ${projectId}::uuid, ${actor.workspaceId}::uuid, ${input.title}, ${input.severity},
           ${input.description}, ${input.stepsToReproduce},
           ${run?.id ?? null}::uuid, ${run?.testCaseId ?? null}::uuid, ${run?.testCaseName ?? null},
           ${run?.gherkinScript ?? null}, ${failedStep},
-          ${actor.userId}::uuid, ${actor.displayName ?? 'Unknown user'}
+          ${actor.userId}::uuid, ${actor.displayName ?? 'Unknown user'}, ${run?.attempt ?? null}::integer
         )
         RETURNING id, title
       `;
@@ -81,6 +93,9 @@ export class BugsController {
       }
       const details = { ...(run ? { testRunId: run.id } : {}), ...(tags.length > 0 ? { tags: tags.map((t) => t.name) } : {}) };
       await logBugActivity(tx, actor, 'bug.created', bug, Object.keys(details).length > 0 ? details : undefined);
+      if (run) {
+        await emitRunBugsChanged(tx, actor, run.executionId, run.id);
+      }
       return loadBug(tx, projectId, bug.id);
     });
   }
@@ -113,6 +128,27 @@ export class BugsController {
     }
     const workspaceId = await resolveProjectWorkspaceId(this.prisma, request.auth!.userId, projectId);
     return withTenantContext(this.prisma, workspaceId, (tx) => loadBug(tx, projectId, bugId));
+  }
+
+  /** The bug's own history, newest first, 20 per page (ADR 0021 decision 2). */
+  @Get(':bugId/activity')
+  @UseGuards(ProjectRoleGuard)
+  @RequireProjectRole('Viewer')
+  async activity(
+    @Param('projectId') projectId: string,
+    @Param('bugId') bugId: string,
+    @Query('before') before: unknown,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<ActivityHistoryResponse> {
+    if (!isUuid(bugId)) {
+      throw new NotFoundException('bug not found');
+    }
+    const cursor = parseHistoryCursor(before);
+    const workspaceId = await resolveProjectWorkspaceId(this.prisma, request.auth!.userId, projectId);
+    return withTenantContext(this.prisma, workspaceId, async (tx) => {
+      await loadBug(tx, projectId, bugId); // 404 when missing, deleted or another tenant's
+      return toHistoryResponse(await listBugHistory(tx, { workspaceId, projectId, bugId, before: cursor }));
+    });
   }
 
   /** Edits fields, severity and status — any status to any other (ADR 0013 decision 1). */
@@ -183,6 +219,7 @@ export class BugsController {
         }
       }
       await logBugActivity(tx, actor, 'bug.updated', { id: bugId, title: input.title ?? current.title }, { changes });
+      await announceLinkedRun(tx, actor, bugId);
 
       return loadBug(tx, projectId, bugId);
     });
@@ -214,7 +251,7 @@ export class BugsController {
         UPDATE bug SET
           test_run_id = ${run.id}::uuid, test_case_id = ${run.testCaseId}::uuid,
           test_case_name_snapshot = ${run.testCaseName}, gherkin_snapshot = ${run.gherkinScript},
-          failed_step_snapshot = NULL, updated_at = now()
+          failed_step_snapshot = NULL, attempt = ${run.attempt}::integer, updated_at = now()
         WHERE id = ${bugId}::uuid AND project_id = ${projectId}::uuid
           AND deleted_at IS NULL AND test_run_id IS NULL
         RETURNING id, title
@@ -224,6 +261,7 @@ export class BugsController {
         throw new ConflictException('this bug is already linked to a run');
       }
       await logBugActivity(tx, actor, 'bug.linked', linked, { testRunId: run.id });
+      await emitRunBugsChanged(tx, actor, run.executionId, run.id);
       return loadBug(tx, projectId, bugId);
     });
   }
@@ -252,6 +290,7 @@ export class BugsController {
         throw new NotFoundException('bug not found');
       }
       await logBugActivity(tx, actor, 'bug.deleted', deleted);
+      await announceLinkedRun(tx, actor, deleted.id);
     });
   }
 }

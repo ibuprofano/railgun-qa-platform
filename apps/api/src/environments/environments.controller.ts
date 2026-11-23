@@ -26,6 +26,7 @@ import { resolveProjectWorkspaceId } from '../common/resolve-project-workspace';
 import { encrypt, decrypt } from '../common/secrets-encryption';
 import { log } from '../common/activity-logger';
 import type { AuthenticatedRequest } from '../common/clerk-auth.guard';
+import { loadActorDisplayName } from '../executions/execution-queries';
 
 type DefaultBrowser = 'Chromium' | 'Firefox' | 'WebKit';
 
@@ -167,6 +168,36 @@ function toEnvironmentResponse(environment: EnvironmentRow, credentials: Credent
   };
 }
 
+/** Who and where an environment change happened, for its activity entry (ADR 0007). */
+interface EnvironmentActor {
+  workspaceId: string;
+  projectId: string;
+  userId: string;
+  displayName: string | null;
+}
+
+/** Writes an environment activity entry in the caller's transaction; never a password. */
+function logEnvironment(
+  tx: Prisma.TransactionClient,
+  actor: EnvironmentActor,
+  actionCode: 'environment.created' | 'environment.updated' | 'environment.deleted',
+  environment: { id: string; name: string },
+  details?: Record<string, unknown>,
+): Promise<void> {
+  return log(tx, {
+    workspaceId: actor.workspaceId,
+    projectId: actor.projectId,
+    actorUserId: actor.userId,
+    actorDisplayName: actor.displayName ?? 'Unknown user',
+    actionCode,
+    entityType: 'environment',
+    entityId: environment.id,
+    entityName: environment.name,
+    category: 'Environments',
+    details,
+  });
+}
+
 @Controller('projects/:projectId/environments')
 export class EnvironmentsController {
   constructor(private readonly prisma: PrismaService) {}
@@ -185,6 +216,7 @@ export class EnvironmentsController {
     const newCredentials = validateNewCredentials(body.credentials);
 
     const workspaceId = await resolveProjectWorkspaceId(this.prisma, request.auth!.userId, projectId);
+    const actor = await this.environmentActor(request, workspaceId, projectId);
     const environmentId = randomUUID();
 
     const credentialsToInsert = await Promise.all(
@@ -210,6 +242,9 @@ export class EnvironmentsController {
           `;
           inserted.push({ id: credential.id, environment_id: environmentId, alias: credential.alias, email: credential.email });
         }
+        await logEnvironment(tx, actor, 'environment.created', { id: environmentId, name }, {
+          credentials: credentialsToInsert.map((credential) => credential.alias),
+        });
         return inserted;
       });
 
@@ -304,6 +339,8 @@ export class EnvironmentsController {
 
     const workspaceId = await resolveProjectWorkspaceId(this.prisma, request.auth!.userId, projectId);
 
+    const actor = await this.environmentActor(request, workspaceId, projectId);
+
     const reconciliation = body.credentials === undefined ? null : await this.planCredentialReconciliation(
       workspaceId,
       environmentId,
@@ -313,6 +350,17 @@ export class EnvironmentsController {
 
     try {
       const { environment, credentials } = await withTenantContext(this.prisma, workspaceId, async (tx) => {
+        // The state before the change, locked, so the activity entry describes exactly it.
+        const [before] = await tx.$queryRaw<EnvironmentRow[]>`
+          SELECT id, name, base_url, default_browser FROM environment
+          WHERE id = ${environmentId}::uuid AND project_id = ${projectId}::uuid
+          FOR UPDATE
+        `;
+        const credentialsBefore = before
+          ? await tx.$queryRaw<CredentialRow[]>`
+              SELECT id, environment_id, alias, email FROM environment_credential WHERE environment_id = ${environmentId}::uuid
+            `
+          : [];
         const environments = await tx.$queryRaw<EnvironmentRow[]>`
           UPDATE environment
           SET
@@ -353,6 +401,7 @@ export class EnvironmentsController {
           WHERE environment_id = ${environmentId}::uuid
           ORDER BY created_at ASC
         `;
+        await logEnvironmentUpdate(tx, actor, before!, environments[0], credentialsBefore, reconciliation);
         return { environment: environments[0], credentials };
       });
 
@@ -379,14 +428,19 @@ export class EnvironmentsController {
     @Req() request: AuthenticatedRequest,
   ): Promise<void> {
     const workspaceId = await resolveProjectWorkspaceId(this.prisma, request.auth!.userId, projectId);
+    const actor = await this.environmentActor(request, workspaceId, projectId);
 
-    const rows = await withTenantContext(this.prisma, workspaceId, (tx) =>
-      tx.$queryRaw<{ id: string }[]>`
+    const rows = await withTenantContext(this.prisma, workspaceId, async (tx) => {
+      const deleted = await tx.$queryRaw<{ id: string; name: string }[]>`
         DELETE FROM environment
         WHERE id = ${environmentId}::uuid AND project_id = ${projectId}::uuid
-        RETURNING id
-      `,
-    );
+        RETURNING id, name
+      `;
+      if (deleted.length > 0) {
+        await logEnvironment(tx, actor, 'environment.deleted', deleted[0]);
+      }
+      return deleted;
+    });
 
     if (rows.length === 0) {
       throw new NotFoundException('environment not found');
@@ -443,6 +497,15 @@ export class EnvironmentsController {
 
     response.header('Cache-Control', 'no-store');
     return { password };
+  }
+
+  private async environmentActor(
+    request: AuthenticatedRequest,
+    workspaceId: string,
+    projectId: string,
+  ): Promise<EnvironmentActor> {
+    const userId = request.auth!.userId;
+    return { workspaceId, projectId, userId, displayName: await loadActorDisplayName(this.prisma, userId) };
   }
 
   /**
@@ -521,4 +584,51 @@ export class EnvironmentsController {
 
     return { deleteIds, updates, inserts };
   }
+}
+
+type Reconciliation = {
+  deleteIds: string[];
+  updates: { id: string; alias: string; email: string; ciphertext: string | null }[];
+  inserts: { id: string; alias: string }[];
+} | null;
+
+/**
+ * `environment.updated` (ADR 0021 consequence): the fields that changed, from → to, and
+ * the credential aliases added, changed (alias, email or password) and removed. Nothing
+ * is written when nothing changed; passwords never appear.
+ */
+async function logEnvironmentUpdate(
+  tx: Prisma.TransactionClient,
+  actor: EnvironmentActor,
+  before: EnvironmentRow,
+  after: EnvironmentRow,
+  credentialsBefore: CredentialRow[],
+  reconciliation: Reconciliation,
+): Promise<void> {
+  const changes: Record<string, { from: string; to: string }> = {};
+  if (before.name !== after.name) changes.name = { from: before.name, to: after.name };
+  if (before.base_url !== after.base_url) changes.baseUrl = { from: before.base_url, to: after.base_url };
+  if (before.default_browser !== after.default_browser) {
+    changes.defaultBrowser = { from: before.default_browser, to: after.default_browser };
+  }
+
+  const byId = new Map(credentialsBefore.map((credential) => [credential.id, credential]));
+  const added = reconciliation?.inserts.map((insert) => insert.alias) ?? [];
+  const removed = reconciliation?.deleteIds.map((id) => byId.get(id)?.alias).filter((alias): alias is string => !!alias) ?? [];
+  const changed =
+    reconciliation?.updates
+      .filter((update) => {
+        const old = byId.get(update.id);
+        return !old || old.alias !== update.alias || old.email !== update.email || update.ciphertext !== null;
+      })
+      .map((update) => update.alias) ?? [];
+
+  const credentialChanges = added.length + changed.length + removed.length > 0;
+  if (Object.keys(changes).length === 0 && !credentialChanges) {
+    return;
+  }
+  await logEnvironment(tx, actor, 'environment.updated', { id: after.id, name: after.name }, {
+    ...(Object.keys(changes).length > 0 ? { changes } : {}),
+    ...(credentialChanges ? { credentials: { added, changed, removed } } : {}),
+  });
 }

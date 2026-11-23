@@ -47,6 +47,22 @@ describe('RunBugs', () => {
     expect(listBugs).toHaveBeenCalledWith(expect.anything(), 'p1', 'run-1');
   });
 
+  it('groups bugs by attempt once the execution was restarted, current attempt first', async () => {
+    vi.mocked(listBugs).mockImplementation(async () => [
+      makeBug({ id: 'b1', title: 'Found first time', attempt: 1 }),
+      makeBug({ id: 'b2', title: 'Found again', attempt: 2 }),
+    ]);
+    renderWithProviders(<RunBugs projectId="p1" execution={makeExecution({ status: 'Ready', attempt: 2 })} run={run} role="Viewer" />);
+
+    const current = await screen.findByRole('list', { name: 'Bugs from attempt 2' });
+    const earlier = screen.getByRole('list', { name: 'Bugs from attempt 1' });
+    expect(within(current).getByText('Found again')).toBeTruthy();
+    expect(within(earlier).getByText('Found first time')).toBeTruthy();
+    expect(screen.getByText('Current attempt (2)')).toBeTruthy();
+    // Current attempt's group comes first.
+    expect(current.compareDocumentPosition(earlier) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('offers neither File bug nor Link existing bug to a Viewer', async () => {
     renderRunBugs('InProgress', 'Viewer');
     await screen.findByRole('link', { name: 'Total is wrong' });

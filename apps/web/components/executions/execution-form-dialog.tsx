@@ -16,6 +16,7 @@ import {
   type ExecutionInput,
 } from '../../lib/executions-api';
 import { useApplyExecution } from '../../lib/use-execution-cache';
+import { duplicateName, duplicateSelection } from '../../lib/execution-duplicate';
 import { FormDialog } from '../form-dialog';
 import { ExecutionTestCasePicker } from './execution-test-case-picker';
 import { SelectedTestCases, type SelectedItem } from './selected-test-cases';
@@ -65,10 +66,31 @@ export interface ExecutionFormDialogProps {
   /** Create mode: test cases picked up front (e.g. "Run" on a test case). */
   initialTestCaseIds?: string[];
   defaultName?: string;
+  /** Create mode, Try Again → Duplicate (ADR 0020): pre-fill from this execution. */
+  source?: Execution;
   onSaved: (execution: Execution) => void;
 }
 
-function initialValues(execution?: Execution, initialTestCaseIds: string[] = [], defaultName = ''): FormValues {
+function initialValues(
+  execution?: Execution,
+  initialTestCaseIds: string[] = [],
+  defaultName = '',
+  source?: Execution,
+): FormValues {
+  if (source && !execution) {
+    return {
+      name: duplicateName(source),
+      description: source.description ?? '',
+      testCaseIds: duplicateSelection(source).testCaseIds,
+      environmentId: source.environmentId ?? NONE,
+      browser: source.browser,
+      viewportWidth: source.viewportWidth,
+      viewportHeight: source.viewportHeight,
+      locale: source.locale,
+      timezone: source.timezone,
+      autoCreateBug: source.autoCreateBug,
+    };
+  }
   return {
     name: execution?.name ?? defaultName,
     description: execution?.description ?? '',
@@ -93,12 +115,14 @@ export function ExecutionFormDialog({
   execution,
   initialTestCaseIds,
   defaultName,
+  source,
   onSaved,
 }: ExecutionFormDialogProps) {
   const apiClient = useApiClient();
   const applyExecution = useApplyExecution(projectId);
   const editing = execution !== undefined;
-  const original = initialValues(execution, initialTestCaseIds, defaultName);
+  const original = initialValues(execution, initialTestCaseIds, defaultName, source);
+  const notCarriedOver = source && !editing ? duplicateSelection(source).notCarriedOver : [];
 
   const {
     register,
@@ -120,7 +144,7 @@ export function ExecutionFormDialog({
     if (!open) {
       return;
     }
-    const values = initialValues(execution, initialTestCaseIds, defaultName);
+    const values = initialValues(execution, initialTestCaseIds, defaultName, source);
     reset(values);
     const preset = `${values.viewportWidth}x${values.viewportHeight}`;
     setViewportPreset(VIEWPORT_PRESETS.some((p) => p.value === preset) ? preset : CUSTOM);
@@ -143,7 +167,7 @@ export function ExecutionFormDialog({
   const picked = watch('testCaseIds');
   const selectedItems: SelectedItem[] = picked.map((id) => {
     const testCase = testCases.find((candidate) => candidate.id === id);
-    const runName = execution?.runs?.find((run) => run.testCaseId === id)?.testCaseName;
+    const runName = (execution ?? source)?.runs?.find((run) => run.testCaseId === id)?.testCaseName;
     return { id, name: testCase?.name ?? runName ?? 'Unknown test case', status: testCase?.status };
   });
   const setPicked = (ids: string[]) => setValue('testCaseIds', ids, { shouldValidate: true, shouldDirty: true });
@@ -232,6 +256,18 @@ export function ExecutionFormDialog({
           </div>
         </div>
         {errors.testCaseIds && <p className="text-sm text-destructive">{errors.testCaseIds.message}</p>}
+        {notCarriedOver.length > 0 && (
+          <div className="flex flex-col gap-1 rounded-md border border-dashed p-2 text-sm" aria-label="Not carried over">
+            <span className="font-medium">Not carried over</span>
+            <ul className="list-disc pl-5 text-muted-foreground">
+              {notCarriedOver.map((item) => (
+                <li key={item.runId}>
+                  {item.name}: {item.reason}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </fieldset>
 
       <div className="grid gap-4 sm:grid-cols-2">

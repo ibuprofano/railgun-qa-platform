@@ -6,6 +6,7 @@ import request from 'supertest';
 import { createTestPrismaClient } from './helpers/prisma-test-client';
 import { createWorkspaceWithProject, type WorkspaceFixture } from './helpers/cross-tenant-harness';
 import { activityCodesFor, insertEnvironment, insertTestCases, setUpProjectMember } from './helpers/execution-fixtures';
+import { startLiveListener } from './helpers/live-listener';
 import { withTenantContext } from '../src/common/tenant-context';
 
 jest.mock('@clerk/backend', () => ({
@@ -212,6 +213,30 @@ describe('executions: authoring (e2e, specs/test-execution-authoring)', () => {
       expect(detail.body.runs.map((r: { testCaseName: string; outcome: string }) => [r.testCaseName, r.outcome])).toEqual([
         ['Beta', 'Pending'],
         ['Alpha', 'Pending'],
+      ]);
+    });
+
+    it('reports attempt 1 and each run’s current test case status (null once deleted)', async () => {
+      const f = await fixture('Exec-TcStatus');
+      const contributor = await setUpProjectMember(prisma, f.workspaceId, f.projectId, 'Contributor');
+      const admin = await setUpProjectMember(prisma, f.workspaceId, f.projectId, 'Admin');
+      const [a, b, c] = await insertTestCases(prisma, f.workspaceId, f.projectId, ['A', 'B', 'C']);
+      const created = await createExecution(f, contributor, { name: 'Statuses', testCaseIds: [a, b, c] });
+      const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
+      await api().patch(`/projects/${f.projectId}/test-cases/${b}`).set(auth(contributor)).send({ status: 'Deprecated' });
+      await api().delete(`/projects/${f.projectId}/test-cases/${c}`).set(auth(admin));
+
+      const detail = await api().get(`/projects/${f.projectId}/executions/${created.body.id}`).set(auth(contributor));
+      const list = await api().get(`/projects/${f.projectId}/executions`).set(auth(contributor));
+
+      expect(created.body.attempt).toBe(1);
+      expect(list.body.find((e: { id: string }) => e.id === created.body.id).attempt).toBe(1);
+      expect(
+        detail.body.runs.map((r: { testCaseStatus: string | null; testCaseDeleted: boolean }) => [r.testCaseStatus, r.testCaseDeleted]),
+      ).toEqual([
+        ['Ready', false],
+        ['Deprecated', false],
+        [null, true],
       ]);
     });
 
@@ -443,6 +468,150 @@ describe('executions: authoring (e2e, specs/test-execution-authoring)', () => {
     });
   });
 
+  describe('add and remove runs (ADR 0021)', () => {
+    type RunRow = { id: string; position: number; testCaseId: string; outcome: string };
+
+    async function draft(label: string, names = ['A', 'B', 'C']) {
+      const f = await fixture(label);
+      const contributor = await setUpProjectMember(prisma, f.workspaceId, f.projectId, 'Contributor');
+      const viewer = await setUpProjectMember(prisma, f.workspaceId, f.projectId, 'Viewer');
+      const ids = await insertTestCases(prisma, f.workspaceId, f.projectId, names);
+      const created = await createExecution(f, contributor, { name: label, testCaseIds: ids });
+      const base = `/projects/${f.projectId}/executions/${created.body.id}`;
+      const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
+      const runs = async (): Promise<RunRow[]> => (await api().get(base).set(auth(contributor))).body.runs;
+      return { f, contributor, viewer, ids, executionId: created.body.id as string, base, auth, runs };
+    }
+
+    const entryDetails = (f: WorkspaceFixture, executionId: string, code: string) =>
+      withTenantContext(prisma, f.workspaceId, (tx) =>
+        tx.$queryRaw<{ details: Record<string, unknown>; actor_display_name: string }[]>`
+          SELECT details, actor_display_name FROM activity_entries
+          WHERE entity_id = ${executionId}::uuid AND action_code = ${code}
+        `,
+      );
+
+    it('adds a Ready test case as the last Pending run, and logs it', async () => {
+      const d = await draft('Run-Add');
+      const [extra] = await insertTestCases(prisma, d.f.workspaceId, d.f.projectId, ['D']);
+
+      const response = await api().post(`${d.base}/runs`).set(d.auth(d.contributor)).send({ testCaseId: extra });
+
+      expect(response.status).toBe(201);
+      expect(response.body.runs.map((r: RunRow) => [r.testCaseId, r.position, r.outcome])).toEqual([
+        [d.ids[0], 1, 'Pending'],
+        [d.ids[1], 2, 'Pending'],
+        [d.ids[2], 3, 'Pending'],
+        [extra, 4, 'Pending'],
+      ]);
+      const [entry] = await entryDetails(d.f, d.executionId, 'test_execution.run_added');
+      expect(entry.details).toEqual({ testCaseId: extra, testCaseName: 'D', position: 4 });
+      expect(entry.actor_display_name).toEqual(expect.any(String));
+    });
+
+    it('refuses a test case already in the execution (409)', async () => {
+      const d = await draft('Run-AddDup');
+
+      const response = await api().post(`${d.base}/runs`).set(d.auth(d.contributor)).send({ testCaseId: d.ids[1] });
+
+      expect(response.status).toBe(409);
+      expect(await d.runs()).toHaveLength(3);
+    });
+
+    it('rejects Draft, Deprecated, deleted, foreign or malformed test cases (400)', async () => {
+      const d = await draft('Run-AddInvalid');
+      const admin = await setUpProjectMember(prisma, d.f.workspaceId, d.f.projectId, 'Admin');
+      const [drafty, old, gone] = await insertTestCases(prisma, d.f.workspaceId, d.f.projectId, ['Drafty', 'Old', 'Gone']);
+      await api().patch(`/projects/${d.f.projectId}/test-cases/${drafty}`).set(d.auth(d.contributor)).send({ status: 'Draft' });
+      await api().patch(`/projects/${d.f.projectId}/test-cases/${old}`).set(d.auth(d.contributor)).send({ status: 'Deprecated' });
+      await api().delete(`/projects/${d.f.projectId}/test-cases/${gone}`).set(d.auth(admin));
+      const other = await fixture('Run-AddInvalid-Other');
+      const [foreign] = await insertTestCases(prisma, other.workspaceId, other.projectId, ['Foreign']);
+
+      for (const testCaseId of [drafty, old, gone, foreign, 'not-a-uuid']) {
+        const response = await api().post(`${d.base}/runs`).set(d.auth(d.contributor)).send({ testCaseId });
+        expect(response.status).toBe(400);
+      }
+      expect(await d.runs()).toHaveLength(3);
+    });
+
+    it('refuses adding to a Ready execution (409), and denies a Viewer (403)', async () => {
+      const d = await draft('Run-AddReady');
+      const [extra] = await insertTestCases(prisma, d.f.workspaceId, d.f.projectId, ['D']);
+
+      const byViewer = await api().post(`${d.base}/runs`).set(d.auth(d.viewer)).send({ testCaseId: extra });
+      await api().post(`${d.base}/mark-ready`).set(d.auth(d.contributor));
+      const onReady = await api().post(`${d.base}/runs`).set(d.auth(d.contributor)).send({ testCaseId: extra });
+
+      expect(byViewer.status).toBe(403);
+      expect(onReady.status).toBe(409);
+      expect(await d.runs()).toHaveLength(3);
+    });
+
+    it('removes a run, closing up positions and keeping run ids, and logs it', async () => {
+      const d = await draft('Run-Remove');
+      const [a, b, c] = await d.runs();
+
+      const response = await api().delete(`${d.base}/runs/${b.id}`).set(d.auth(d.contributor));
+
+      expect(response.status).toBe(200);
+      expect(response.body.runs.map((r: RunRow) => [r.id, r.position])).toEqual([
+        [a.id, 1],
+        [c.id, 2],
+      ]);
+      const [entry] = await entryDetails(d.f, d.executionId, 'test_execution.run_removed');
+      expect(entry.details).toEqual({ testCaseId: d.ids[1], testCaseName: 'B', fromPosition: 2 });
+    });
+
+    it('refuses removing the last run (409)', async () => {
+      const d = await draft('Run-RemoveLast', ['Only']);
+      const [only] = await d.runs();
+
+      const response = await api().delete(`${d.base}/runs/${only.id}`).set(d.auth(d.contributor));
+
+      expect(response.status).toBe(409);
+      expect(await d.runs()).toHaveLength(1);
+    });
+
+    it('refuses on a Ready execution (409), 404s a run of another execution, and denies a Viewer (403)', async () => {
+      const d = await draft('Run-RemoveRefused');
+      const other = await draft('Run-RemoveRefused-Other');
+      const [otherRun] = await other.runs();
+      const [first] = await d.runs();
+
+      const foreignRun = await api().delete(`${d.base}/runs/${otherRun.id}`).set(d.auth(d.contributor));
+      const byViewer = await api().delete(`${d.base}/runs/${first.id}`).set(d.auth(d.viewer));
+      await api().post(`${d.base}/mark-ready`).set(d.auth(d.contributor));
+      const onReady = await api().delete(`${d.base}/runs/${first.id}`).set(d.auth(d.contributor));
+
+      expect(foreignRun.status).toBe(404);
+      expect(byViewer.status).toBe(403);
+      expect(onReady.status).toBe(409);
+      expect(await d.runs()).toHaveLength(3);
+    });
+
+    it('adding and removing emit execution.changed; a refusal emits nothing', async () => {
+      const listener = await startLiveListener();
+      try {
+        const d = await draft('Run-Live');
+        const [extra] = await insertTestCases(prisma, d.f.workspaceId, d.f.projectId, ['D']);
+        const ofProject = async () => (await listener.take()).filter((e) => e.projectId === d.f.projectId);
+        const expected = [{ type: 'execution.changed', workspaceId: d.f.workspaceId, projectId: d.f.projectId, executionId: d.executionId }];
+        await listener.take();
+
+        await api().post(`${d.base}/runs`).set(d.auth(d.contributor)).send({ testCaseId: extra });
+        expect(await ofProject()).toEqual(expected);
+        const [first] = await d.runs();
+        await api().delete(`${d.base}/runs/${first.id}`).set(d.auth(d.contributor));
+        expect(await ofProject()).toEqual(expected);
+        await api().post(`${d.base}/runs`).set(d.auth(d.contributor)).send({ testCaseId: extra });
+        expect(await ofProject()).toEqual([]);
+      } finally {
+        await listener.close();
+      }
+    });
+  });
+
   describe('delete', () => {
     it('an Admin soft-deletes a Draft execution', async () => {
       const f = await fixture('Exec-Delete');
@@ -511,6 +680,65 @@ describe('executions: authoring (e2e, specs/test-execution-authoring)', () => {
 
       expect(deleted.status).toBe(204);
       expect(detail.body).toMatchObject({ environmentId: null, environmentName: 'Doomed env' });
+    });
+  });
+
+  describe('live events (specs/live-updates)', () => {
+    it('create, edit, run move and delete each emit execution.changed with the execution id', async () => {
+      const listener = await startLiveListener();
+      try {
+        const f = await fixture('Exec-Live');
+        const admin = await setUpProjectMember(prisma, f.workspaceId, f.projectId, 'Admin');
+        const [a, b] = await insertTestCases(prisma, f.workspaceId, f.projectId, ['A', 'B']);
+        const auth = { Authorization: `Bearer ${admin}` };
+        const ofProject = async () => (await listener.take()).filter((e) => e.projectId === f.projectId);
+        const expected = (executionId: string) => [
+          { type: 'execution.changed', workspaceId: f.workspaceId, projectId: f.projectId, executionId },
+        ];
+
+        const created = await createExecution(f, admin, { name: 'Live', testCaseIds: [a, b] });
+        const base = `/projects/${f.projectId}/executions/${created.body.id}`;
+        expect(await ofProject()).toEqual(expected(created.body.id));
+
+        await api().patch(base).set(auth).send({ name: 'Live 2' });
+        expect(await ofProject()).toEqual(expected(created.body.id));
+
+        const [, second] = created.body.runs.map((r: { id: string }) => r.id);
+        await api().post(`${base}/runs/${second}/move`).set(auth).send({ afterRunId: null });
+        expect(await ofProject()).toEqual(expected(created.body.id));
+
+        await api().delete(base).set(auth);
+        expect(await ofProject()).toEqual(expected(created.body.id));
+      } finally {
+        await listener.close();
+      }
+    });
+
+    it('a refused edit (409) and a move that changes nothing emit no event', async () => {
+      const listener = await startLiveListener();
+      try {
+        const f = await fixture('Exec-LiveRefused');
+        const admin = await setUpProjectMember(prisma, f.workspaceId, f.projectId, 'Admin');
+        const [a, b] = await insertTestCases(prisma, f.workspaceId, f.projectId, ['A', 'B']);
+        const auth = { Authorization: `Bearer ${admin}` };
+        const created = await createExecution(f, admin, { name: 'Refused', testCaseIds: [a, b] });
+        const base = `/projects/${f.projectId}/executions/${created.body.id}`;
+        const [first] = created.body.runs.map((r: { id: string }) => r.id);
+        await listener.take();
+
+        const unchanged = await api().post(`${base}/runs/${first}/move`).set(auth).send({ afterRunId: null });
+        expect(unchanged.status).toBe(200);
+        expect((await listener.take()).filter((e) => e.projectId === f.projectId)).toEqual([]);
+
+        await api().post(`${base}/mark-ready`).set(auth);
+        await listener.take();
+        const refused = await api().patch(base).set(auth).send({ name: 'Nope' });
+
+        expect(refused.status).toBe(409);
+        expect((await listener.take()).filter((e) => e.projectId === f.projectId)).toEqual([]);
+      } finally {
+        await listener.close();
+      }
     });
   });
 });

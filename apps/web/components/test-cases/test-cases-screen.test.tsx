@@ -2,12 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { TestCasesScreen } from './test-cases-screen';
 import { getTestCase, listTestCases } from '../../lib/test-cases-api';
-import { createExecution } from '../../lib/executions-api';
+import { addRun, createExecution, getExecution, listExecutions } from '../../lib/executions-api';
 import { listEnvironments } from '../../lib/environments-api';
 import { useSessionContext } from '../../lib/session-context';
 import type { ProjectRole } from '../../lib/test-case-permissions';
 import { renderWithProviders } from '../../test/render-with-providers';
-import { makeExecution } from '../../test/execution-fixtures';
+import { makeExecution, makeExecutionWithRuns, makeRun } from '../../test/execution-fixtures';
 
 const push = vi.fn();
 let search = new URLSearchParams();
@@ -31,6 +31,9 @@ vi.mock('../../lib/test-cases-api', () => ({
 vi.mock('../../lib/executions-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/executions-api')>()),
   createExecution: vi.fn(),
+  listExecutions: vi.fn(),
+  getExecution: vi.fn(),
+  addRun: vi.fn(),
 }));
 vi.mock('../../lib/environments-api', () => ({ listEnvironments: vi.fn() }));
 vi.mock('../../lib/folders-api', async (importOriginal) => ({
@@ -56,6 +59,11 @@ async function openTestCase(name: string) {
   await screen.findByText('Manual');
 }
 
+
+/** Radix's DropdownMenu opens on pointerdown, not click. */
+function openRunMenu() {
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'Run' }), { button: 0, ctrlKey: false, pointerType: 'mouse' });
+}
 describe('Run from a test case', () => {
   beforeEach(() => {
     push.mockReset();
@@ -73,7 +81,8 @@ describe('Run from a test case', () => {
     renderWithProviders(<TestCasesScreen />);
 
     await openTestCase('Login works');
-    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    openRunMenu();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'New execution' }));
 
     const dialog = await screen.findByRole('dialog');
     expect((within(dialog).getByLabelText('Name') as HTMLInputElement).value).toBe('Login works');
@@ -88,6 +97,56 @@ describe('Run from a test case', () => {
       ),
     );
     expect(push).toHaveBeenCalledWith('/executions?execution=new-exec');
+  });
+
+  describe('Run → Add to existing execution (ADR 0021)', () => {
+    beforeEach(() => {
+      vi.mocked(addRun).mockReset();
+      vi.mocked(listExecutions).mockResolvedValue([
+        makeExecution({ id: 'smoke', name: 'Smoke', status: 'Draft' }),
+        makeExecution({ id: 'regression', name: 'Regression', status: 'Draft' }),
+        makeExecution({ id: 'nightly', name: 'Nightly', status: 'Ready' }),
+      ]);
+      vi.mocked(getExecution).mockImplementation(async (_client, _projectId, id) =>
+        makeExecutionWithRuns(id === 'regression' ? [makeRun({ testCaseId: 'tc-ready' })] : [makeRun({ testCaseId: 'tc-other' })], {
+          id,
+          status: 'Draft',
+        }),
+      );
+    });
+
+    it('lists Draft executions, disables one that already holds it, and adds to the chosen one', async () => {
+      asRole('Contributor');
+      vi.mocked(addRun).mockResolvedValue(makeExecution({ id: 'smoke', name: 'Smoke' }));
+      renderWithProviders(<TestCasesScreen />);
+
+      await openTestCase('Login works');
+      openRunMenu();
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Add to existing execution…' }));
+      const list = await screen.findByRole('list', { name: 'Draft executions' });
+
+      expect(within(list).queryByText('Nightly')).toBeNull();
+      await waitFor(() =>
+        expect((within(list).getByRole('button', { name: /Regression/ }) as HTMLButtonElement).disabled).toBe(true),
+      );
+      expect(within(list).getByText('Already includes it')).toBeTruthy();
+      fireEvent.click(within(list).getByRole('button', { name: /Smoke/ }));
+
+      await waitFor(() => expect(addRun).toHaveBeenCalledWith(expect.anything(), 'p1', 'smoke', 'tc-ready'));
+      await waitFor(() => expect(push).toHaveBeenCalledWith('/executions?execution=smoke'));
+    });
+
+    it('says so when there are no Draft executions', async () => {
+      asRole('Contributor');
+      vi.mocked(listExecutions).mockResolvedValue([makeExecution({ id: 'nightly', status: 'Ready' })]);
+      renderWithProviders(<TestCasesScreen />);
+
+      await openTestCase('Login works');
+      openRunMenu();
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Add to existing execution…' }));
+
+      expect(await screen.findByText(/There are no Draft executions/)).toBeTruthy();
+    });
   });
 
   it.each(['Not finished', 'Obsolete'])('Run is not offered for a non-Ready test case (%s)', async (name) => {

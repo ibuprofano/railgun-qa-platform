@@ -143,6 +143,19 @@ export function builder(pool: Pool, ws: WorkspaceFixture) {
       });
       return { executionId, runId };
     },
+    /** An attempt-history row for a run, as Restart writes it (ADR 0020). */
+    async attempt(executionId: string, runId: string, opts: { testCaseId?: string; attempt?: number } = {}): Promise<string> {
+      const id = randomUUID();
+      await run((c) =>
+        c.query(
+          `INSERT INTO test_run_attempt (id, workspace_id, execution_id, test_run_id, test_case_id, attempt, position,
+             outcome, test_case_name_snapshot)
+           VALUES ($1, $2, $3, $4, $5, $6, 1, 'Fail', 'Attempt snapshot')`,
+          [id, ws.workspaceId, executionId, runId, opts.testCaseId ?? null, opts.attempt ?? 1],
+        ),
+      );
+      return id;
+    },
     async bug(
       title: string,
       reporterId: string,
@@ -152,9 +165,12 @@ export function builder(pool: Pool, ws: WorkspaceFixture) {
       await run((c) =>
         c.query(
           `INSERT INTO bug (id, project_id, workspace_id, title, severity, test_case_id, test_run_id,
-             reporter_id, reporter_display_name, deleted_at)
-           VALUES ($1, $2, $3, $4, 'High', $5, $6, $7, 'Fixture User', $8)`,
-          [id, opts.projectId ?? ws.projectId, ws.workspaceId, title, opts.testCaseId ?? null, opts.testRunId ?? null, reporterId, del(opts.deleted)],
+             reporter_id, reporter_display_name, deleted_at, attempt)
+           VALUES ($1, $2, $3, $4, 'High', $5, $6, $7, 'Fixture User', $8, $9)`,
+          [
+            id, opts.projectId ?? ws.projectId, ws.workspaceId, title, opts.testCaseId ?? null, opts.testRunId ?? null,
+            reporterId, del(opts.deleted), opts.testRunId ? 1 : null,
+          ],
         ),
       );
       return id;

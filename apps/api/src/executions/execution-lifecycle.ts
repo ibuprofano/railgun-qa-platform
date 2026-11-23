@@ -10,10 +10,11 @@ export type ExecutionStatus = 'Draft' | 'Ready' | 'InProgress' | 'Paused' | 'Com
 
 export type RunOutcome = 'Pending' | 'Pass' | 'Fail' | 'NeedsReview';
 
-export type LifecycleAction = 'markReady' | 'backToDraft' | 'runAll' | 'pause' | 'resume' | 'signOff';
+export type LifecycleAction = 'markReady' | 'backToDraft' | 'runAll' | 'pause' | 'resume' | 'signOff' | 'cancel';
 
 export interface Transition {
-  from: ExecutionStatus;
+  /** The statuses this action may start from; any other is refused with 409. */
+  from: ExecutionStatus[];
   to: ExecutionStatus;
   minRole: ProjectRole;
   /** Activity log action code (ADR 0007), recorded in the same transaction. */
@@ -21,13 +22,26 @@ export interface Transition {
 }
 
 export const TRANSITIONS: Record<LifecycleAction, Transition> = {
-  markReady: { from: 'Draft', to: 'Ready', minRole: 'Contributor', actionCode: 'test_execution.marked_ready' },
-  backToDraft: { from: 'Ready', to: 'Draft', minRole: 'Contributor', actionCode: 'test_execution.returned_to_draft' },
-  runAll: { from: 'Ready', to: 'InProgress', minRole: 'Contributor', actionCode: 'test_execution.started' },
-  pause: { from: 'InProgress', to: 'Paused', minRole: 'Contributor', actionCode: 'test_execution.paused' },
-  resume: { from: 'Paused', to: 'InProgress', minRole: 'Contributor', actionCode: 'test_execution.resumed' },
-  signOff: { from: 'Completed', to: 'Done', minRole: 'Admin', actionCode: 'test_execution.signed_off' },
+  markReady: { from: ['Draft'], to: 'Ready', minRole: 'Contributor', actionCode: 'test_execution.marked_ready' },
+  backToDraft: { from: ['Ready'], to: 'Draft', minRole: 'Contributor', actionCode: 'test_execution.returned_to_draft' },
+  runAll: { from: ['Ready'], to: 'InProgress', minRole: 'Contributor', actionCode: 'test_execution.started' },
+  pause: { from: ['InProgress'], to: 'Paused', minRole: 'Contributor', actionCode: 'test_execution.paused' },
+  resume: { from: ['Paused'], to: 'InProgress', minRole: 'Contributor', actionCode: 'test_execution.resumed' },
+  signOff: { from: ['Completed'], to: 'Done', minRole: 'Admin', actionCode: 'test_execution.signed_off' },
+  // ADR 0019: Contributors may cancel; Pending runs stay Pending and outcomes lock.
+  cancel: { from: ['InProgress', 'Paused'], to: 'Canceled', minRole: 'Contributor', actionCode: 'test_execution.canceled' },
 };
+
+/**
+ * Restart (ADR 0020) is not in TRANSITIONS: it has several source statuses with
+ * different role rules and more than one statement, so it has its own handler.
+ */
+export const RESTARTABLE_STATUSES: ExecutionStatus[] = ['Completed', 'Done', 'Canceled'];
+
+/** Restarting a signed-off (Done) execution undoes the sign-off, so it needs an Admin. */
+export function restartMinRole(status: ExecutionStatus): ProjectRole {
+  return status === 'Done' ? 'Admin' : 'Contributor';
+}
 
 /** Outcomes a person may record (ADR 0012: never back to Pending). */
 export const RECORDABLE_OUTCOMES: RunOutcome[] = ['Pass', 'Fail', 'NeedsReview'];
@@ -39,7 +53,7 @@ export const OUTCOME_EDITABLE_STATUSES: ExecutionStatus[] = ['InProgress', 'Comp
 export const ACTIVE_STATUSES: ExecutionStatus[] = ['Ready', 'InProgress', 'Paused'];
 
 export function canTransition(action: LifecycleAction, current: ExecutionStatus): boolean {
-  return TRANSITIONS[action].from === current;
+  return TRANSITIONS[action].from.includes(current);
 }
 
 /** True when recording an outcome should move the execution to Completed. */

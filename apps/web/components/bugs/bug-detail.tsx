@@ -24,6 +24,8 @@ import { OUTCOME_LABELS } from '../executions/status-badge';
 import { ActionError } from '../action-error';
 import { BugStatusBadge, SeverityDot } from './bug-badges';
 import { GherkinView } from '../gherkin-view';
+import { ActivityHistory } from '../activity/activity-history';
+import { activityKeys, listBugActivity } from '../../lib/activity-api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -79,6 +81,7 @@ export function BugDetail({ projectId, bugId, role, onDeleted }: BugDetailProps)
       }
       queryClient.invalidateQueries({ queryKey: bugKeys.list(projectId) });
       queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'bugs', 'run'] });
+      queryClient.invalidateQueries({ queryKey: activityKeys.bug(projectId, bugId) });
     },
   });
 
@@ -176,6 +179,12 @@ export function BugDetail({ projectId, bugId, role, onDeleted }: BugDetailProps)
             <ReadOnlyText label="Steps to reproduce" value={bug.stepsToReproduce} />
           </>
         )}
+
+        <ActivityHistory
+          queryKey={activityKeys.bug(projectId, bugId)}
+          fetchPage={(before) => listBugActivity(apiClient, projectId, bugId, before)}
+          label="Bug history"
+        />
 
         {canDeleteBug(role) && <DeleteBug projectId={projectId} bug={bug} onDeleted={onDeleted} />}
       </CardContent>

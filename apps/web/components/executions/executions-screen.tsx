@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useSessionContext } from '../../lib/session-context';
 import { PageHeader } from '../page-header';
 import { canCreateExecution } from '../../lib/execution-permissions';
+import type { Execution } from '../../lib/executions-api';
 import { ExecutionList } from './execution-list';
 import { ExecutionDetail } from './execution-detail';
 import { ExecutionFormDialog } from './execution-form-dialog';
@@ -22,6 +23,8 @@ export function ExecutionsScreen() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [creating, setCreating] = useState(false);
+  // Try Again → Duplicate: the execution the New Execution form is pre-filled from.
+  const [duplicateSource, setDuplicateSource] = useState<Execution | undefined>(undefined);
 
   if (session.loading || !session.data) {
     return null;
@@ -59,6 +62,10 @@ export function ExecutionsScreen() {
               executionId={selectedId}
               role={role}
               onDeleted={() => select(null)}
+              onDuplicate={(source) => {
+                setDuplicateSource(source);
+                setCreating(true);
+              }}
             />
           ) : (
             <p className="p-6 text-sm text-muted-foreground">Select an execution to see its runs.</p>
@@ -67,7 +74,13 @@ export function ExecutionsScreen() {
         <ExecutionFormDialog
           projectId={projectId}
           open={creating}
-          onOpenChange={setCreating}
+          onOpenChange={(open) => {
+            setCreating(open);
+            if (!open) {
+              setDuplicateSource(undefined);
+            }
+          }}
+          source={duplicateSource}
           onSaved={(execution) => select(execution.id)}
         />
       </div>

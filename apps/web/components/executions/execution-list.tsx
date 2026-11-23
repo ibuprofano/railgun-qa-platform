@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { listTags, tagKeys } from '../../lib/tags-api';
 import { TagFilter } from '../tags/tag-filter';
 import { useApiClient } from '../../lib/api-client';
+import { useLiveConnected } from '../../lib/live-updates';
 import { executionKeys, listExecutions, type Browser, type ExecutionStatus } from '../../lib/executions-api';
 import {
   filterExecutions,
@@ -26,6 +27,9 @@ import { EmptyState, ErrorState, ListSkeleton } from '../states';
 const ALL = '__all__';
 const STATUSES: ExecutionStatus[] = ['Draft', 'Ready', 'InProgress', 'Paused', 'Completed', 'Done'];
 const BROWSERS: Browser[] = ['Chromium', 'Firefox', 'WebKit'];
+/** How often the list is refetched while the live stream is down and something is under way. */
+export const LIST_REFETCH_MS = 10_000;
+
 const SORT_OPTIONS: { value: `${ExecutionSortKey}:${SortDirection}`; label: string }[] = [
   { value: 'updatedAt:desc', label: 'Last updated (newest)' },
   { value: 'updatedAt:asc', label: 'Last updated (oldest)' },
@@ -47,6 +51,7 @@ export function ExecutionList({ projectId, selectedId, onSelect, canCreate, onCr
   const apiClient = useApiClient();
   const [sort, setSort] = useState<(typeof SORT_OPTIONS)[number]['value']>('updatedAt:desc');
   const [filters, setFilters] = useState<ExecutionFilters>({});
+  const liveConnected = useLiveConnected();
 
   const {
     data: executions = [],
@@ -56,9 +61,12 @@ export function ExecutionList({ projectId, selectedId, onSelect, canCreate, onCr
   } = useQuery({
     queryKey: executionKeys.list(projectId),
     queryFn: () => listExecutions(apiClient, projectId),
-    // Polling instead of SSE (ADR 0005/0011): only while something is under way.
+    // Live events refresh this while the stream is up; polling is the fallback (ADR 0005),
+    // and only while something is under way.
     refetchInterval: (query) =>
-      query.state.data?.some((e) => e.status === 'InProgress' || e.status === 'Paused') ? 10_000 : false,
+      !liveConnected && query.state.data?.some((e) => e.status === 'InProgress' || e.status === 'Paused')
+        ? LIST_REFETCH_MS
+        : false,
   });
 
   // Executions carry no tags themselves; they match on their test cases' tags (PRD §6.3.2).

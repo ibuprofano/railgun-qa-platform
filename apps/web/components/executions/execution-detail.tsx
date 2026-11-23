@@ -4,10 +4,11 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { arrayMove } from '@dnd-kit/sortable';
 import { useApiClient } from '../../lib/api-client';
-import { executionKeys, getExecution, moveRun, type Execution } from '../../lib/executions-api';
-import { canReorderRuns } from '../../lib/execution-permissions';
+import { executionKeys, getExecution, moveRun, removeRun, type Execution } from '../../lib/executions-api';
+import { canEditDraftRuns } from '../../lib/execution-permissions';
 import { useApplyExecution } from '../../lib/use-execution-cache';
 import { notifySuccess } from '../../lib/notify';
+import { useLiveConnected } from '../../lib/live-updates';
 import { ActionError } from '../action-error';
 import type { ProjectRole } from '../../lib/test-case-permissions';
 import { ExecutionHeader } from './execution-header';
@@ -19,8 +20,10 @@ import { EnvironmentPanel } from './environment-panel';
 import { ExecutionFormDialog } from './execution-form-dialog';
 import { Card, CardContent } from '@/components/ui/card';
 import { DetailSkeleton, ErrorState } from '../states';
+import { ActivityHistory } from '../activity/activity-history';
+import { activityKeys, listExecutionActivity } from '../../lib/activity-api';
 
-/** How often a live execution is refetched (spec: at least every 5 seconds). */
+/** How often a live execution is refetched while the live stream is down (spec: at least every 5 seconds). */
 export const LIVE_REFETCH_MS = 5_000;
 
 export interface ExecutionDetailProps {
@@ -28,12 +31,15 @@ export interface ExecutionDetailProps {
   executionId: string;
   role: ProjectRole | null;
   onDeleted: () => void;
+  /** Try Again → Duplicate (ADR 0020): the screen opens the New Execution form from it. */
+  onDuplicate?: (source: Execution) => void;
 }
 
-export function ExecutionDetail({ projectId, executionId, role, onDeleted }: ExecutionDetailProps) {
+export function ExecutionDetail({ projectId, executionId, role, onDeleted, onDuplicate }: ExecutionDetailProps) {
   const apiClient = useApiClient();
   const queryClient = useQueryClient();
   const applyExecution = useApplyExecution(projectId);
+  const liveConnected = useLiveConnected();
   const [outcomeFilter, setOutcomeFilter] = useState<OutcomeFilter>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [environmentOpen, setEnvironmentOpen] = useState(false);
@@ -47,10 +53,11 @@ export function ExecutionDetail({ projectId, executionId, role, onDeleted }: Exe
   } = useQuery({
     queryKey: executionKeys.detail(projectId, executionId),
     queryFn: () => getExecution(apiClient, projectId, executionId),
-    // Polling instead of SSE (ADR 0005/0011): only while work is under way.
+    // Live events refresh this while the stream is up; polling is the fallback (ADR 0005),
+    // and only while work is under way.
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === 'InProgress' || status === 'Paused' ? LIVE_REFETCH_MS : false;
+      return !liveConnected && (status === 'InProgress' || status === 'Paused') ? LIVE_REFETCH_MS : false;
     },
   });
 
@@ -84,6 +91,14 @@ export function ExecutionDetail({ projectId, executionId, role, onDeleted }: Exe
     },
   });
 
+  const remove = useMutation({
+    mutationFn: (runId: string) => removeRun(apiClient, projectId, executionId, runId),
+    onSuccess: (saved) => {
+      notifySuccess('Run removed');
+      applyExecution(saved);
+    },
+  });
+
   if (isLoading) {
     return <DetailSkeleton />;
   }
@@ -106,6 +121,7 @@ export function ExecutionDetail({ projectId, executionId, role, onDeleted }: Exe
               role={role}
               onEdit={() => setEditing(true)}
               onDeleted={onDeleted}
+              onDuplicate={() => onDuplicate?.(execution)}
             />
           }
         />
@@ -114,10 +130,19 @@ export function ExecutionDetail({ projectId, executionId, role, onDeleted }: Exe
           runs={execution.runs ?? []}
           filter={outcomeFilter}
           onSelectRun={setSelectedRunId}
-          reorderable={canReorderRuns(execution.status, role) && outcomeFilter === null && !reorder.isPending}
+          reorderable={canEditDraftRuns(execution.status, role) && outcomeFilter === null && !reorder.isPending}
           onMove={(runId, afterRunId) => reorder.mutate({ runId, afterRunId })}
+          removable={canEditDraftRuns(execution.status, role)}
+          onRemove={(runId) => remove.mutate(runId)}
+          removing={remove.isPending}
         />
         <ActionError error={reorder.error} />
+        <ActionError error={remove.error} />
+        <ActivityHistory
+          queryKey={activityKeys.execution(projectId, executionId)}
+          fetchPage={(before) => listExecutionActivity(apiClient, projectId, executionId, before)}
+          label="Execution history"
+        />
       </CardContent>
 
       <RunPanel

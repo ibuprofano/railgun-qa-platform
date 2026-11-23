@@ -2,6 +2,8 @@ import {
   Body,
   ConflictException,
   Controller,
+  ForbiddenException,
+  Get,
   HttpCode,
   NotFoundException,
   Param,
@@ -23,18 +25,24 @@ import {
   type ExecutionStatus,
   type LifecycleAction,
   OUTCOME_EDITABLE_STATUSES,
+  RESTARTABLE_STATUSES,
+  restartMinRole,
   type RunOutcome,
   TRANSITIONS,
 } from './execution-lifecycle';
+import { ROLE_RANK } from '../common/project-role';
 import { isUuid, parseOutcome, parseRunMode } from './execution-input';
 import {
   type ExecutionActor,
   type ExecutionResponse,
+  listRunAttempts,
   loadActorDisplayName,
   loadExecution,
   logExecutionActivity,
+  type RunAttemptResponse,
 } from './execution-queries';
 import { autoCreateBugForRun } from '../bugs/bug-queries';
+import { emitExecutionChanged, emitRunBugsChanged } from '../realtime/live-event';
 
 /** Adds the current InProgress period to the accumulator (ADR 0005 timer model). */
 const STOP_TIMER = Prisma.sql`
@@ -80,6 +88,8 @@ const ACTION_SQL: Record<LifecycleAction, ActionSql> = {
     )`,
     preconditionMessage: 'resolve every Needs Review run to Pass or Fail before signing off',
   },
+  // ADR 0019: from Paused, STOP_TIMER adds nothing (last_resumed_at is already null).
+  cancel: { set: () => Prisma.sql`, ${STOP_TIMER}` },
 };
 
 /**
@@ -114,24 +124,29 @@ export class ExecutionLifecycleController {
 
     return withTenantContext(this.prisma, actor.workspaceId, async (tx) => {
       const precondition = sql.precondition ? Prisma.sql`AND ${sql.precondition(executionId)}` : Prisma.empty;
-      const [updated] = await tx.$queryRaw<{ id: string; name: string }[]>`
-        UPDATE test_execution
-        SET status = ${to}, updated_at = now() ${sql.set(actor.userId)}
-        WHERE id = ${executionId}::uuid AND project_id = ${projectId}::uuid
-          AND deleted_at IS NULL AND status = ${from} ${precondition}
-        RETURNING id, name
+      // Lock first so the status read here is the one the guarded UPDATE acts on: an action
+      // with several source statuses (Cancel) logs which one it actually left.
+      const [current] = await tx.$queryRaw<{ status: ExecutionStatus }[]>`
+        SELECT status FROM test_execution
+        WHERE id = ${executionId}::uuid AND project_id = ${projectId}::uuid AND deleted_at IS NULL
+        FOR UPDATE
       `;
+      const [updated] = current
+        ? await tx.$queryRaw<{ id: string; name: string }[]>`
+            UPDATE test_execution
+            SET status = ${to}, updated_at = now() ${sql.set(actor.userId)}
+            WHERE id = ${executionId}::uuid AND project_id = ${projectId}::uuid
+              AND deleted_at IS NULL AND status = ANY(${from}::text[]) ${precondition}
+            RETURNING id, name
+          `
+        : [];
 
       if (!updated) {
-        const [existing] = await tx.$queryRaw<{ status: ExecutionStatus }[]>`
-          SELECT status FROM test_execution
-          WHERE id = ${executionId}::uuid AND project_id = ${projectId}::uuid AND deleted_at IS NULL
-        `;
-        if (!existing) {
+        if (!current) {
           throw new NotFoundException('execution not found');
         }
-        if (existing.status !== from) {
-          throw new ConflictException(`cannot ${action} an execution that is ${existing.status}`);
+        if (!from.includes(current.status)) {
+          throw new ConflictException(`cannot ${action} an execution that is ${current.status}`);
         }
         throw new ConflictException(sql.preconditionMessage);
       }
@@ -142,8 +157,9 @@ export class ExecutionLifecycleController {
         actor,
         actionCode,
         { type: 'test_execution', id: updated.id, name: updated.name },
-        { from, to },
+        { from: current.status, to },
       );
+      await emitExecutionChanged(tx, actor, updated.id);
       return loadExecution(tx, projectId, executionId);
     });
   }
@@ -212,6 +228,128 @@ export class ExecutionLifecycleController {
     return this.transition('signOff', projectId, executionId, request);
   }
 
+  @Post('cancel')
+  @HttpCode(200)
+  @UseGuards(ProjectRoleGuard)
+  @RequireProjectRole(TRANSITIONS.cancel.minRole)
+  cancel(@Param('projectId') projectId: string, @Param('executionId') executionId: string, @Req() request: AuthenticatedRequest) {
+    return this.transition('cancel', projectId, executionId, request);
+  }
+
+  /**
+   * Restart (ADR 0020): Completed, Done or Canceled → Ready for a new attempt. One
+   * transaction under the execution's row lock (the lock outcome writes take), in the
+   * order of design.md decision 2: keep every run's result as an attempt, drop runs whose
+   * test case is gone, close up positions, reset the rest, then reset the execution.
+   */
+  @Post('restart')
+  @HttpCode(200)
+  @UseGuards(ProjectRoleGuard)
+  @RequireProjectRole('Contributor')
+  async restart(
+    @Param('projectId') projectId: string,
+    @Param('executionId') executionId: string,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<ExecutionResponse> {
+    if (!isUuid(executionId)) {
+      throw new NotFoundException('execution not found');
+    }
+    const actor = await this.actor(request, projectId);
+    const role = request.auth!.projectRole!;
+
+    return withTenantContext(this.prisma, actor.workspaceId, async (tx) => {
+      const [execution] = await tx.$queryRaw<
+        { id: string; name: string; status: ExecutionStatus; attempt: number; elapsed_ms_accumulated: bigint }[]
+      >`
+        SELECT id, name, status, attempt, elapsed_ms_accumulated FROM test_execution
+        WHERE id = ${executionId}::uuid AND project_id = ${projectId}::uuid AND deleted_at IS NULL
+        FOR UPDATE
+      `;
+      if (!execution) {
+        throw new NotFoundException('execution not found');
+      }
+      if (!RESTARTABLE_STATUSES.includes(execution.status)) {
+        throw new ConflictException(`cannot restart an execution that is ${execution.status}`);
+      }
+      if (ROLE_RANK[role] < ROLE_RANK[restartMinRole(execution.status)]) {
+        throw new ForbiddenException('only a Project Admin can restart a signed-off execution');
+      }
+
+      // A run is dropped when its test case is in the trash or purged (ADR 0020 decision 5).
+      const gone = Prisma.sql`NOT EXISTS (
+        SELECT 1 FROM test_case tc WHERE tc.id = r.test_case_id AND tc.deleted_at IS NULL
+      )`;
+      const [{ kept, dropped }] = await tx.$queryRaw<{ kept: bigint; dropped: bigint }[]>`
+        SELECT COUNT(*) FILTER (WHERE NOT ${gone}) AS kept, COUNT(*) FILTER (WHERE ${gone}) AS dropped
+        FROM test_run r WHERE r.execution_id = ${executionId}::uuid
+      `;
+      if (Number(kept) === 0) {
+        throw new ConflictException('every test case in this execution was deleted; duplicate it with other test cases instead');
+      }
+
+      await tx.$executeRaw`
+        INSERT INTO test_run_attempt (
+          workspace_id, execution_id, test_run_id, test_case_id, attempt, position, outcome,
+          outcome_updated_at, outcome_updated_by_name, test_case_name_snapshot, gherkin_script_snapshot
+        )
+        SELECT r.workspace_id, r.execution_id, r.id, r.test_case_id, ${execution.attempt}::integer, r.position, r.outcome,
+               r.outcome_updated_at, r.outcome_updated_by_name, r.test_case_name_snapshot, r.gherkin_script_snapshot
+        FROM test_run r WHERE r.execution_id = ${executionId}::uuid
+      `;
+      await tx.$executeRaw`DELETE FROM test_run r WHERE r.execution_id = ${executionId}::uuid AND ${gone}`;
+      // Positions are unique per execution but deferred, so renumbering in one statement is safe.
+      await tx.$executeRaw`
+        UPDATE test_run SET position = t.ord,
+          outcome = 'Pending', outcome_updated_at = NULL, outcome_updated_by = NULL, outcome_updated_by_name = NULL,
+          test_case_name_snapshot = NULL, gherkin_script_snapshot = NULL
+        FROM (
+          SELECT id, row_number() OVER (ORDER BY position, id) AS ord
+          FROM test_run WHERE execution_id = ${executionId}::uuid
+        ) t
+        WHERE test_run.id = t.id
+      `;
+      await tx.$executeRaw`
+        UPDATE test_execution
+        SET status = 'Ready', attempt = attempt + 1, elapsed_ms_accumulated = 0, last_resumed_at = NULL,
+            started_at = NULL, completed_at = NULL, signed_off_at = NULL, signed_off_by = NULL, updated_at = now()
+        WHERE id = ${executionId}::uuid
+      `;
+
+      await logExecutionActivity(
+        tx,
+        actor,
+        'test_execution.restarted',
+        { type: 'test_execution', id: execution.id, name: execution.name },
+        {
+          from: execution.status,
+          to: 'Ready',
+          elapsedMs: Number(execution.elapsed_ms_accumulated),
+          attempt: execution.attempt + 1,
+          droppedRuns: Number(dropped),
+        },
+      );
+      await emitExecutionChanged(tx, actor, execution.id);
+      return loadExecution(tx, projectId, executionId);
+    });
+  }
+
+  /** A run's earlier attempts, newest first (ADR 0020 decision 4). */
+  @Get('runs/:runId/attempts')
+  @UseGuards(ProjectRoleGuard)
+  @RequireProjectRole('Viewer')
+  async runAttempts(
+    @Param('projectId') projectId: string,
+    @Param('executionId') executionId: string,
+    @Param('runId') runId: string,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<RunAttemptResponse[]> {
+    if (!isUuid(executionId) || !isUuid(runId)) {
+      throw new NotFoundException('run not found');
+    }
+    const actor = await this.actor(request, projectId);
+    return withTenantContext(this.prisma, actor.workspaceId, (tx) => listRunAttempts(tx, projectId, executionId, runId));
+  }
+
   /**
    * Records a manual outcome. Locks the execution row first so outcome writes on one
    * execution are serialized — otherwise two testers recording the last two outcomes
@@ -259,7 +397,8 @@ export class ExecutionLifecycleController {
 
       await tx.$executeRaw`
         UPDATE test_run
-        SET outcome = ${outcome}, outcome_updated_at = now(), outcome_updated_by = ${actor.userId}::uuid
+        SET outcome = ${outcome}, outcome_updated_at = now(), outcome_updated_by = ${actor.userId}::uuid,
+            outcome_updated_by_name = ${actor.displayName ?? 'Unknown user'}
         WHERE id = ${runId}::uuid
       `;
       await tx.$executeRaw`UPDATE test_execution SET updated_at = now() WHERE id = ${executionId}::uuid`;
@@ -271,8 +410,8 @@ export class ExecutionLifecycleController {
         { executionId, from: run.outcome, to: outcome },
       );
       // ADR 0013 decision 2: same transaction, at most once per run (DB-enforced).
-      if (outcome === 'Fail' && execution.auto_create_bug) {
-        await autoCreateBugForRun(tx, actor, runId);
+      if (outcome === 'Fail' && execution.auto_create_bug && (await autoCreateBugForRun(tx, actor, runId))) {
+        await emitRunBugsChanged(tx, actor, executionId, runId);
       }
 
       const [{ pending }] = await tx.$queryRaw<{ pending: bigint }[]>`
@@ -292,6 +431,7 @@ export class ExecutionLifecycleController {
           { from: 'InProgress', to: 'Completed' },
         );
       }
+      await emitExecutionChanged(tx, actor, executionId);
 
       return loadExecution(tx, projectId, executionId);
     });

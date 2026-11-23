@@ -6,6 +6,8 @@ import { log } from '../common/activity-logger';
 import type { ExecutionStatus, RunOutcome } from './execution-lifecycle';
 import type { Browser } from './execution-input';
 
+export type TestCaseStatus = 'Draft' | 'Ready' | 'Deprecated';
+
 /**
  * Read shape shared by the authoring and lifecycle controllers, so both return the
  * same execution response (design.md - two controllers, one resource).
@@ -15,7 +17,7 @@ const EXECUTION_COLUMNS = Prisma.sql`
   e.id, e.name, e.description, e.status, e.environment_id, e.environment_name, e.browser,
   e.viewport_width, e.viewport_height, e.locale, e.timezone, e.auto_create_bug,
   e.elapsed_ms_accumulated, e.last_resumed_at, e.started_at, e.completed_at,
-  e.signed_off_at, e.signed_off_by, e.created_at, e.updated_at,
+  e.signed_off_at, e.signed_off_by, e.created_at, e.updated_at, e.attempt,
   (SELECT COUNT(*) FROM test_run r WHERE r.execution_id = e.id) AS total_runs,
   (SELECT COUNT(*) FROM test_run r WHERE r.execution_id = e.id AND r.outcome <> 'Pending') AS done_runs,
   (SELECT COUNT(*) FROM test_run r WHERE r.execution_id = e.id AND r.outcome = 'Pass') AS pass_runs,
@@ -48,6 +50,7 @@ interface ExecutionRow {
   signed_off_by: string | null;
   created_at: Date;
   updated_at: Date;
+  attempt: number;
   total_runs: bigint;
   done_runs: bigint;
   pass_runs: bigint;
@@ -63,6 +66,7 @@ interface RunRow {
   name: string | null;
   gherkin_script: string | null;
   test_case_deleted: boolean;
+  test_case_status: TestCaseStatus | null;
   outcome: RunOutcome;
   outcome_updated_at: Date | null;
 }
@@ -76,6 +80,8 @@ export interface RunResponse {
   gherkinScript: string | null;
   /** True when the test case was deleted (or purged) after being added. */
   testCaseDeleted: boolean;
+  /** The test case's status now; null once deleted or purged (Duplicate's eligibility, ADR 0020). */
+  testCaseStatus: TestCaseStatus | null;
   outcome: RunOutcome;
   outcomeUpdatedAt: string | null;
 }
@@ -102,6 +108,8 @@ export interface ExecutionResponse {
   signedOffBy: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Current attempt (ADR 0020): 1 until the execution is first restarted. */
+  attempt: number;
   counts: { total: number; done: number; pass: number; fail: number; needsReview: number };
   /** Tags currently carried by the test cases of its runs (ADR 0016). */
   tagIds: string[];
@@ -134,6 +142,7 @@ function toResponse(row: ExecutionRow, now: Date, runs?: RunRow[]): ExecutionRes
     signedOffBy: row.signed_off_by,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
+    attempt: row.attempt,
     counts: {
       total: Number(row.total_runs),
       done: Number(row.done_runs),
@@ -150,10 +159,67 @@ function toResponse(row: ExecutionRow, now: Date, runs?: RunRow[]): ExecutionRes
       testCaseName: run.name,
       gherkinScript: run.gherkin_script,
       testCaseDeleted: run.test_case_deleted,
+      testCaseStatus: run.test_case_status,
       outcome: run.outcome,
       outcomeUpdatedAt: iso(run.outcome_updated_at),
     })),
   };
+}
+
+export interface RunAttemptResponse {
+  attempt: number;
+  position: number;
+  outcome: RunOutcome;
+  outcomeUpdatedAt: string | null;
+  /** Who set the outcome, by name; null for an outcome recorded before names were kept. */
+  outcomeUpdatedByName: string | null;
+  testCaseName: string | null;
+  gherkinScript: string | null;
+}
+
+/**
+ * A run's earlier attempts, newest first (ADR 0020). 404 when the run is not part of this
+ * project's non-deleted execution, which RLS also makes true for another tenant's run.
+ */
+export async function listRunAttempts(
+  tx: Prisma.TransactionClient,
+  projectId: string,
+  executionId: string,
+  runId: string,
+): Promise<RunAttemptResponse[]> {
+  const [run] = await tx.$queryRaw<{ id: string }[]>`
+    SELECT r.id FROM test_run r JOIN test_execution e ON e.id = r.execution_id
+    WHERE r.id = ${runId}::uuid AND e.id = ${executionId}::uuid
+      AND e.project_id = ${projectId}::uuid AND e.deleted_at IS NULL
+  `;
+  if (!run) {
+    throw new NotFoundException('run not found');
+  }
+  const rows = await tx.$queryRaw<
+    {
+      attempt: number;
+      position: number;
+      outcome: RunOutcome;
+      outcome_updated_at: Date | null;
+      outcome_updated_by_name: string | null;
+      test_case_name_snapshot: string | null;
+      gherkin_script_snapshot: string | null;
+    }[]
+  >`
+    SELECT attempt, position, outcome, outcome_updated_at, outcome_updated_by_name,
+           test_case_name_snapshot, gherkin_script_snapshot
+    FROM test_run_attempt WHERE test_run_id = ${runId}::uuid
+    ORDER BY attempt DESC
+  `;
+  return rows.map((row) => ({
+    attempt: row.attempt,
+    position: row.position,
+    outcome: row.outcome,
+    outcomeUpdatedAt: iso(row.outcome_updated_at),
+    outcomeUpdatedByName: row.outcome_updated_by_name,
+    testCaseName: row.test_case_name_snapshot,
+    gherkinScript: row.gherkin_script_snapshot,
+  }));
 }
 
 /** Lists a project's non-deleted executions, most recently updated first. */
@@ -186,7 +252,8 @@ export async function loadExecution(
            COALESCE(r.test_case_name_snapshot, tc.name) AS name,
            CASE WHEN r.test_case_name_snapshot IS NOT NULL THEN r.gherkin_script_snapshot ELSE tc.gherkin_script END
              AS gherkin_script,
-           (tc.id IS NULL OR tc.deleted_at IS NOT NULL) AS test_case_deleted
+           (tc.id IS NULL OR tc.deleted_at IS NOT NULL) AS test_case_deleted,
+           CASE WHEN tc.deleted_at IS NULL THEN tc.status END AS test_case_status
     FROM test_run r
     LEFT JOIN test_case tc ON tc.id = r.test_case_id
     WHERE r.execution_id = ${executionId}::uuid

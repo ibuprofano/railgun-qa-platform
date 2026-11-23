@@ -16,6 +16,12 @@ import { ProjectRoleGuard } from './common/project-role.guard';
 import { WorkspaceOwnerGuard } from './common/workspace-owner.guard';
 import { RevealRateLimitGuard } from './common/reveal-rate-limit.guard';
 import { PrismaService } from './common/prisma.service';
+import { LiveEventsService } from './realtime/live-events.service';
+import {
+  DEFAULT_LIVE_STREAM_TIMING,
+  LIVE_STREAM_TIMING,
+  LiveEventsController,
+} from './realtime/live-events.controller';
 
 @Module({
   controllers: [
@@ -30,9 +36,12 @@ import { PrismaService } from './common/prisma.service';
     FoldersController,
     TagsController,
     WorkspaceController,
+    LiveEventsController,
   ],
   providers: [
     PrismaService,
+    LiveEventsService,
+    { provide: LIVE_STREAM_TIMING, useValue: DEFAULT_LIVE_STREAM_TIMING },
     ProjectRoleGuard,
     WorkspaceOwnerGuard,
     RevealRateLimitGuard,

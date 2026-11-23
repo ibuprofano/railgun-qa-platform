@@ -322,9 +322,11 @@ The execution moves through the following states, with available actions at each
 
 Run All, Pause, and Resume are available to Contributors and Project Admins; Viewers do not see them. Run All cannot start an execution that contains no test runs: the user is asked to add at least one test case first. When an execution starts, each run records the name and Gherkin script of its test case as they are at that moment.
 
-**Try Again** (from Done or Canceled) offers:
-- Duplicate the execution with a custom subset of test cases (a new execution is created).
-- Restart the current execution (all results are reset and the execution is re-run from scratch).
+**Cancel** (from In Progress or Paused, Contributors and Project Admins) stops the timer and ends the execution. Runs not yet run stay Pending, and no outcome can be changed afterwards.
+
+**Try Again** (from Completed, Done or Canceled) offers:
+- Duplicate the execution with a custom subset of test cases (a new Draft execution is created with the same settings; every eligible test case starts selected).
+- Restart the current execution (all results are reset and the execution returns to Ready, to be re-run from scratch). Previous results are kept as the runs' attempt history, and runs whose test case was deleted are dropped. Restarting a Done execution requires a Project Admin.
 
 #### 6.3.5 Traceability Graph
 Accessible from any execution detail view. Opens a full-screen visual graph with four columns:

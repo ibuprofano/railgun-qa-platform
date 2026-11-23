@@ -131,6 +131,31 @@ describe('trash purge', () => {
     expect((await entriesFor(b, tc)).last).toMatchObject({ action_code: 'test_case.purged', entity_name: 'Login works' });
   });
 
+  it('keeps attempt history when its test case is purged, clearing only the link', async () => {
+    const { b, user, purge } = await setUp('Purge-AttemptTestCase');
+    const tc = await b.testCase('Checkout', { deleted: 31 });
+    const { executionId, runId } = await b.execution('Restarted', user, { testCaseId: tc });
+    const attempt = await b.attempt(executionId, runId, { testCaseId: tc });
+
+    await purge();
+
+    expect(await b.one('SELECT test_case_id, test_case_name_snapshot FROM test_run_attempt WHERE id = $1', [attempt])).toEqual({
+      test_case_id: null,
+      test_case_name_snapshot: 'Attempt snapshot',
+    });
+  });
+
+  it('removes a restarted execution’s attempt history with it', async () => {
+    const { b, user, purge } = await setUp('Purge-AttemptExecution');
+    const { executionId, runId } = await b.execution('Old restarted', user, { deleted: 31 });
+    const attempt = await b.attempt(executionId, runId);
+
+    await purge();
+
+    expect(await b.count('test_execution', 'id = $1', executionId)).toBe(0);
+    expect(await b.count('test_run_attempt', 'id = $1', attempt)).toBe(0);
+  });
+
   it('keeps a bug filed from a run when the execution is purged', async () => {
     const { b, user, purge } = await setUp('Purge-Execution');
     const { executionId, runId } = await b.execution('Old run', user, { deleted: 31 });

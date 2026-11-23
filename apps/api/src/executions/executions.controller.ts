@@ -10,6 +10,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -30,6 +31,9 @@ import {
   logExecutionActivity,
 } from './execution-queries';
 import { parseAfterRunId, reorderAfter } from './run-order';
+import { emitExecutionChanged } from '../realtime/live-event';
+import { listExecutionHistory } from '../common/activity-log-reader';
+import { type ActivityHistoryResponse, parseHistoryCursor, toHistoryResponse } from '../common/activity-history';
 
 /**
  * Checks every selected test case is a non-deleted, Ready test case of this project
@@ -122,6 +126,7 @@ export class ExecutionsController {
         id: execution.id,
         name: fields.name!,
       });
+      await emitExecutionChanged(tx, actor, execution.id);
 
       return loadExecution(tx, projectId, execution.id);
     });
@@ -148,6 +153,27 @@ export class ExecutionsController {
     }
     const workspaceId = await resolveProjectWorkspaceId(this.prisma, request.auth!.userId, projectId);
     return withTenantContext(this.prisma, workspaceId, (tx) => loadExecution(tx, projectId, executionId));
+  }
+
+  /** The execution's history, newest first, 20 per page (ADR 0021 decisions 1-2). */
+  @Get(':executionId/activity')
+  @UseGuards(ProjectRoleGuard)
+  @RequireProjectRole('Viewer')
+  async activity(
+    @Param('projectId') projectId: string,
+    @Param('executionId') executionId: string,
+    @Query('before') before: unknown,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<ActivityHistoryResponse> {
+    if (!isUuid(executionId)) {
+      throw new NotFoundException('execution not found');
+    }
+    const cursor = parseHistoryCursor(before);
+    const workspaceId = await resolveProjectWorkspaceId(this.prisma, request.auth!.userId, projectId);
+    return withTenantContext(this.prisma, workspaceId, async (tx) => {
+      await loadExecution(tx, projectId, executionId); // 404 when missing, deleted or another tenant's
+      return toHistoryResponse(await listExecutionHistory(tx, { workspaceId, projectId, executionId, before: cursor }));
+    });
   }
 
   /**
@@ -217,6 +243,7 @@ export class ExecutionsController {
         { type: 'test_execution', id: executionId, name: fields.name ?? current.name },
         { fields: Object.keys(fields) },
       );
+      await emitExecutionChanged(tx, actor, executionId);
 
       return loadExecution(tx, projectId, executionId);
     });
@@ -280,8 +307,129 @@ export class ExecutionsController {
           { type: 'test_execution', id: executionId, name: current.name },
           { runId, fromPosition: from + 1, toPosition: next.indexOf(runId) + 1 },
         );
+        await emitExecutionChanged(tx, actor, executionId);
       }
 
+      return loadExecution(tx, projectId, executionId);
+    });
+  }
+
+  /**
+   * Locks a Draft execution for a run change (ADR 0021): 404 when missing, 409 unless
+   * Draft. Same lock and status rule as moving a run.
+   */
+  private async lockDraft(
+    tx: Prisma.TransactionClient,
+    projectId: string,
+    executionId: string,
+    verb: string,
+  ): Promise<{ name: string }> {
+    const [current] = await tx.$queryRaw<{ status: string; name: string }[]>`
+      SELECT status, name FROM test_execution
+      WHERE id = ${executionId}::uuid AND project_id = ${projectId}::uuid AND deleted_at IS NULL
+      FOR UPDATE
+    `;
+    if (!current) {
+      throw new NotFoundException('execution not found');
+    }
+    if (current.status !== 'Draft') {
+      throw new ConflictException(`test cases can only be ${verb} a Draft execution; this one is ${current.status}`);
+    }
+    return current;
+  }
+
+  /** Adds a Ready test case to a Draft execution as its last run (ADR 0021 decision 4). */
+  @Post(':executionId/runs')
+  @UseGuards(ProjectRoleGuard)
+  @RequireProjectRole('Contributor')
+  async addRun(
+    @Param('projectId') projectId: string,
+    @Param('executionId') executionId: string,
+    @Body() body: { testCaseId?: unknown },
+    @Req() request: AuthenticatedRequest,
+  ): Promise<ExecutionResponse> {
+    if (!isUuid(executionId)) {
+      throw new NotFoundException('execution not found');
+    }
+    if (!isUuid(body?.testCaseId)) {
+      throw new BadRequestException('testCaseId must be a test case id');
+    }
+    const testCaseId = body.testCaseId;
+    const actor = await this.actor(request, projectId);
+
+    return withTenantContext(this.prisma, actor.workspaceId, async (tx) => {
+      const current = await this.lockDraft(tx, projectId, executionId, 'added to');
+      await assertSelectableTestCases(tx, projectId, [testCaseId]);
+      const [already] = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM test_run WHERE execution_id = ${executionId}::uuid AND test_case_id = ${testCaseId}::uuid
+      `;
+      if (already) {
+        throw new ConflictException('this test case is already in the execution');
+      }
+      const [added] = await tx.$queryRaw<{ position: number; name: string }[]>`
+        INSERT INTO test_run (execution_id, workspace_id, test_case_id, position)
+        SELECT ${executionId}::uuid, ${actor.workspaceId}::uuid, ${testCaseId}::uuid,
+               COALESCE((SELECT MAX(position) FROM test_run WHERE execution_id = ${executionId}::uuid), 0) + 1
+        RETURNING position, (SELECT name FROM test_case WHERE id = ${testCaseId}::uuid) AS name
+      `;
+      await tx.$executeRaw`UPDATE test_execution SET updated_at = now() WHERE id = ${executionId}::uuid`;
+      await logExecutionActivity(
+        tx,
+        actor,
+        'test_execution.run_added',
+        { type: 'test_execution', id: executionId, name: current.name },
+        { testCaseId, testCaseName: added.name, position: added.position },
+      );
+      await emitExecutionChanged(tx, actor, executionId);
+      return loadExecution(tx, projectId, executionId);
+    });
+  }
+
+  /** Removes one run of a Draft execution, keeping at least one (ADR 0021 decision 3). */
+  @Delete(':executionId/runs/:runId')
+  @UseGuards(ProjectRoleGuard)
+  @RequireProjectRole('Contributor')
+  async removeRun(
+    @Param('projectId') projectId: string,
+    @Param('executionId') executionId: string,
+    @Param('runId') runId: string,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<ExecutionResponse> {
+    if (!isUuid(executionId) || !isUuid(runId)) {
+      throw new NotFoundException('run not found');
+    }
+    const actor = await this.actor(request, projectId);
+
+    return withTenantContext(this.prisma, actor.workspaceId, async (tx) => {
+      const current = await this.lockDraft(tx, projectId, executionId, 'removed from');
+      const runs = await tx.$queryRaw<{ id: string; test_case_id: string | null; position: number; name: string | null }[]>`
+        SELECT r.id, r.test_case_id, r.position, tc.name
+        FROM test_run r LEFT JOIN test_case tc ON tc.id = r.test_case_id
+        WHERE r.execution_id = ${executionId}::uuid ORDER BY r.position ASC, r.id ASC
+      `;
+      const run = runs.find((candidate) => candidate.id === runId);
+      if (!run) {
+        throw new NotFoundException('run not found');
+      }
+      if (runs.length === 1) {
+        throw new ConflictException('a Draft execution needs at least one test case; edit or delete it instead');
+      }
+      await tx.$executeRaw`DELETE FROM test_run WHERE id = ${runId}::uuid`;
+      const remaining = runs.filter((candidate) => candidate.id !== runId).map((candidate) => candidate.id);
+      await tx.$executeRaw`
+        UPDATE test_run SET position = t.ord
+        FROM unnest(${remaining}::uuid[]) WITH ORDINALITY AS t(id, ord)
+        WHERE test_run.id = t.id
+      `;
+      await tx.$executeRaw`UPDATE test_execution SET updated_at = now() WHERE id = ${executionId}::uuid`;
+      await logExecutionActivity(
+        tx,
+        actor,
+        'test_execution.run_removed',
+        { type: 'test_execution', id: executionId, name: current.name },
+        { testCaseId: run.test_case_id, testCaseName: run.name ?? '(deleted test case)', fromPosition: run.position },
+      );
+      await emitExecutionChanged(tx, actor, executionId);
       return loadExecution(tx, projectId, executionId);
     });
   }
@@ -324,6 +472,7 @@ export class ExecutionsController {
         id: deleted.id,
         name: deleted.name,
       });
+      await emitExecutionChanged(tx, actor, deleted.id);
     });
   }
 }

@@ -28,6 +28,8 @@ Each row says what it **blocks**, so the list can be worked in an order that unb
 | G2: How a test case changes status, and who may | [ADR 0015](adr/0015-test-case-status-changes.md): any status to any other, Contributors and Admins; status gates execution selection only; every change activity-logged |
 | G3: Tag management (rename, recolour, delete) | [ADR 0016](adr/0016-tag-management.md): created inline from the tag picker; a Manage tags dialog where Contributors rename and recolour and Admins delete; fixed eight-colour palette; deleting is permanent and removes the tag everywhere |
 | Where the "last active project" of PRD §5 is remembered, once a workspace has several projects | [ADR 0017](adr/0017-active-project.md): on the server (`user.last_project_id`), resolved on every request with fallbacks to the oldest accessible live project; URLs stay project-free |
+| Cancel (PRD §6.3.4): who may cancel, and what happens to Pending runs | [ADR 0019](adr/0019-execution-cancel.md): Contributors and Admins; timer stops, Pending runs stay Pending, every outcome becomes read-only |
+| G7: Try Again (deleted test cases, attempt history) | [ADR 0020](adr/0020-execution-try-again.md): offered on Completed, Done and Canceled; Restart returns to Ready, keeps results in a `test_run_attempt` table and drops runs whose test case was deleted; Duplicate creates a Draft with every eligible test case selected; bugs record their attempt (one auto-created bug per run per attempt) |
 | B2: Queue library (pg-boss or Graphile Worker), checked against the ORM and the pooler | [ADR 0018](adr/0018-queue-library.md): Graphile Worker; enqueue through a migrator-owned SECURITY DEFINER wrapper inside the existing transaction (no Prisma adapter needed); the worker uses a direct connection |
 
 ## A. Authentication and API access
@@ -95,11 +97,10 @@ Each row says what it **blocks**, so the list can be worked in an order that unb
 | G2 | ~~How does a test case change status (Draft, Ready, Deprecated), and who may?~~ **Resolved:** [ADR 0015](adr/0015-test-case-status-changes.md). | PRD §6.2.3 |
 | G3 | ~~Tag management: how are tags renamed, recoloured or deleted?~~ **Resolved:** [ADR 0016](adr/0016-tag-management.md). | PRD §2.4 |
 | G5 | Concurrent edits (auto-save on blur): last write wins, or optimistic locking with a conflict message? | PRD §6.2.3 |
-| G7 | **Try Again:** what happens when a test case in the chosen subset was deleted, and does Restart keep attempt history? | PRD §6.3.4 |
 | G9 | UI language, date and time zone display, and the full lists of locales and timezones in the New Execution modal. (The API side is settled by `execution-lifecycle`: it accepts any valid BCP 47 locale and IANA timezone via `Intl`, so only the picker lists remain open.) | PRD §7.2 |
 
 ## H. Documentation that no longer matches the decisions
 
 | # | Item |
 |---|---|
-| H1 | Endpoints that exist in the product but are not specified in readme §4 (the format allows three): invitations (create, resend, revoke, accept, decline), revealing an environment credential, trash (list, restore), reports (request, download), and the SSE streams. |
+| H1 | Endpoints that exist in the product but are not specified in readme §4 (the format allows three): invitations (create, resend, revoke, accept, decline), revealing an environment credential, trash (list, restore), reports (request, download), and the SSE streams. The SSE stream now exists as `GET /projects/:projectId/events` (`sse-live-updates`, spec `live-updates`); readme §4 still doesn't specify it. |

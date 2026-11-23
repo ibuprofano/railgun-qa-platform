@@ -110,9 +110,9 @@ First real vertical slice — no lifecycle state machine, no secrets, no real-ti
 Envelope encryption (ADR 0004), `KeyProvider` interface, reveal endpoint with same-transaction audit logging and rate limiting. Self-contained; get it right in isolation before executions reference it.
 
 - **Covered by MVP Phase 5:** envelope encryption with a `KeyProvider`, environment + credential CRUD, audited and rate-limited reveal.
-- **Remaining:** activity entries for environment and credential create, edit and delete (only reveals are logged today, against ADR 0007's every-mutation rule); key/DEK rotation and a KMS-backed `KeyProvider` (ADR 0004's explicit "later"); C1 (where the master key lives in production) and C2 (re-mask after reveal), decided with hosting.
+- **Remaining:** key/DEK rotation and a KMS-backed `KeyProvider` (ADR 0004's explicit "later"); C1 (where the master key lives in production) and C2 (re-mask after reveal), decided with hosting.
 
-## Phase 6 — Background jobs & real-time infra ⬜
+## Phase 6 — Background jobs & real-time infra 🚧
 
 - Graphile Worker queue ([ADR 0018](adr/0018-queue-library.md)), worker process, transactional enqueue (job in the same transaction as the triggering change, through the allow-listed enqueue wrapper).
 - SSE stream endpoint + auth (fetch-based client), channels per execution and per user.
@@ -121,7 +121,7 @@ Envelope encryption (ADR 0004), `KeyProvider` interface, reveal endpoint with sa
 Needed before Phase 7, which depends on both the live-update channel and a proven job pattern.
 
 - **Covered by the MVP:** nothing. The MVP polls (5 s while an execution is live, ADR 0005/0011) and has no jobs.
-- **Remaining:** all of it. Swapping polling for SSE happens inside the existing data hooks, with no API contract change (roadmap-mvp.md "What's safe to cut").
+- **Remaining:** the email job (Slice 3, needs A1). Slices 1 and 2 below are done; SSE replaced polling inside the existing data hooks, with no API contract change (roadmap-mvp.md "What's safe to cut").
   - **Slice 1: Queue and worker ✅** (OpenSpec change `background-jobs`, archived 2026-10-27)
     - **Scope:** Graphile Worker installed by the migrate step, a least-privilege `railgun_worker` role, the allow-listed `enqueue_job` wrapper (transactional enqueue), the first worker code in `apps/worker`, and the daily `trash_purge` job (ADR 0007: items in the trash over 30 days, removed in dependency order with one system activity entry each).
     - **Deferred / out of scope:**
@@ -130,6 +130,27 @@ Needed before Phase 7, which depends on both the live-update channel and a prove
       - enqueueing jobs from API routes (no route needs one yet)
       - deleting bug images on purge (attachments are Phase 8)
       - where the worker runs when deployed (E1–E2)
+  - **Slice 2: SSE live updates ✅** (OpenSpec change `sse-live-updates`, archived 2026-11-10)
+    - **Built:**
+      - **Emitting:** execution create, edit, delete, run move, lifecycle transitions and run outcomes emit `execution.changed`. Bugs filed from a run, auto-created, linked, or edited or deleted while linked emit `run.bugs.changed`. Both go through `pg_notify` in the change's own transaction (`src/realtime/live-event.ts`), so a refused or rolled-back change sends nothing.
+      - **Listener:** `LiveEventsService` keeps one `LISTEN` connection per API process on `REALTIME_DATABASE_URL` (defaults to `DATABASE_URL`). It fans events out per project, reconnects with backoff, sends `resync` after a reconnect, and runs a keepalive.
+      - **Stream:** `GET /projects/:projectId/events` checks the bearer token and Viewer role at open, checks the workspace on every event, sends a 25 s heartbeat, and closes after 5 minutes so access is checked again.
+      - **Web:**
+        - an in-house fetch-based SSE reader (no new dependency)
+        - `LiveUpdatesProvider` in the app layout: one stream per tab for the active project, backoff reconnect, a 60 s silence timeout, and a refetch after every reconnect
+        - the Executions detail and list poll only while the stream is down
+    - **Key decisions / discoveries:**
+      - One project-scoped stream carries both of ADR 0005's channels. Execution access is exactly project access, and the client applies the events it has cached (ADR 0005 records this).
+      - A raw Express response, not `@Sse()`, so the stream can write heartbeat comments and close itself.
+      - `autoCreateBugForRun` now reports whether it created a bug, so failing a run twice announces the bug once.
+      - The listener and controller are registered in the flat `AppModule`, not a separate module.
+      - The secrets e2e suites need `SECRETS_MASTER_KEY` in the shell, since tests never load `.env`.
+    - **Deferred / out of scope:**
+      - the per-user channel (invitations, Phase 3 remainder)
+      - live updates for the Bugs list, Test Cases tree and tags
+      - console and step streams (automated engine)
+      - report-ready notifications (Phase 10)
+      - fan-out tested beyond one API instance (E1–E2)
 
 ## Phase 7 — Test Execution lifecycle 🚧
 
@@ -142,14 +163,83 @@ The readme's three example tickets, in their documented order:
 Resolves G6 (what makes an execution Completed) and G7 (Try Again semantics).
 
 - **Covered by MVP Phases 7 and 9:** schema with timer and snapshot fields; Draft → Ready → In Progress ⇄ Paused → Completed → Done with role rules; manual outcomes; automatic completion and sign-off rules ([ADR 0012](adr/0012-execution-completion-and-sign-off.md), resolves G6); Executions screen with live timer (polling), run panel, environment panel; folder-tree picker and drag-and-drop run ordering.
-- **Remaining:** Cancel; Try Again (G7); the execution activity panel; removing individual runs; "add to existing execution"; automated-mode placeholder; console drawer, step results, attempts, traceability graph; Executions dashboard and report downloads (Phases 9–10); curated locale/timezone lists (G9).
+- **Remaining:** automated-mode placeholder; console drawer, step results, traceability graph; Executions dashboard and report downloads (Phases 9–10); curated locale/timezone lists (G9).
+  - **Slice 1: Cancel and Try Again ✅** (OpenSpec change `execution-cancel-and-try-again`, archived 2026-11-23)
+    - **Built:**
+      - Migration `0015_execution_attempts`:
+        - `test_execution.attempt`, and `test_run.outcome_updated_by_name`
+        - `test_run_attempt`, with forced RLS; its run and test case links are set to null rather than cascaded
+        - `bug.attempt`, backfilled to 1 for bugs linked to a run, and required whenever a bug has a run
+        - the auto-bug index moved to `(test_run_id, attempt)`
+      - **Cancel** (`POST …/cancel`, [ADR 0019](adr/0019-execution-cancel.md)): Contributor+, from In Progress or Paused. The timer stops, Pending runs stay Pending, and outcomes lock.
+      - **Restart** (`POST …/restart`, [ADR 0020](adr/0020-execution-try-again.md)):
+        - from Completed, Done or Canceled; restarting Done needs an Admin
+        - one transaction under the execution's row lock
+        - every run's result is copied into attempt history, runs whose test case was deleted are dropped, positions close up, everything else resets, and the execution goes back to Ready at the next attempt
+        - refused when no runs would be left
+      - **Attempt history:** `GET …/runs/:runId/attempts`, newest first.
+      - **Responses:** executions report `attempt`, runs report `testCaseStatus`, and bugs report `attempt`.
+      - **Bugs:** filing, linking and auto-create record the current attempt, so a run that fails again after a Restart gets a new auto-created bug.
+      - **Web:**
+        - Cancel and Try Again on the detail view, with confirmations
+        - Restart's confirmation names the runs it will drop
+        - Duplicate opens the New Execution form pre-filled ("<name> (retry)", same settings, eligible test cases selected, a "Not carried over" note)
+        - an "Attempt N" badge in the header
+        - the run panel lists earlier attempts and groups bugs by attempt
+    - **Key decisions / discoveries:**
+      - `Transition.from` became a list, so Cancel fits the table.
+      - Every table-driven transition now locks the execution and reads its status before the guarded `UPDATE`, so Cancel logs which status it left.
+      - Restart has its own handler, because its role depends on the source status.
+      - Duplicate is client-only and reuses the create endpoint.
+      - Outcome authors are stored by name, because user rows aren't readable across users under RLS (ADR 0013 decision 6).
+      - The bug backfill lifts `FORCE ROW LEVEL SECURITY` for one statement, as migration 0010 does.
+      - The demo seed and the worker test fixtures now set `attempt` on bugs linked to runs.
+      - Trash purge needed no code change: the FK cascades cover the new table.
+    - **Deferred / out of scope:**
+      - the execution activity panel
+      - removing individual runs from a Draft
+      - "add to existing execution"
+      - a Restart limited to failed runs
+      - live updates for the Bugs list
+      - showing a dropped run's attempts anywhere
+      - recording which execution a duplicate came from
+      - the traceability graph
+      - attempt data in reports (Phases 9–10)
+  - **Slice 2: Execution history and Draft runs ✅** (OpenSpec change `execution-history-and-draft-runs`, archived 2026-11-23, [ADR 0021](adr/0021-execution-history-and-draft-run-changes.md))
+    - **Built:**
+      - **History reads:** `GET …/executions/:id/activity` and `GET …/bugs/:id/activity`, Viewer+, newest first, 20 per page with an opaque keyset cursor (`before`).
+        - An execution's history combines its own entries, its runs' entries (matched on `details.executionId`) and every entry of the bugs currently linked to its runs.
+        - The readers live in `common/activity-log-reader.ts`. No migration.
+      - **Draft runs:**
+        - `POST …/executions/:id/runs` adds a Ready test case as the last run; 409 if it's already there.
+        - `DELETE …/executions/:id/runs/:runId` removes a run and renumbers; 409 on the last run.
+        - Both are Draft only and Contributor+, are logged (`test_execution.run_added` / `run_removed`) and emit `execution.changed`.
+      - **Environment logging:** `environment.created`, `environment.updated` and `environment.deleted`.
+        - Edits record changed fields (from → to) and credential aliases added, changed and removed. Nothing is written when nothing changed, and passwords never appear.
+        - This closes Phase 5's logging gap.
+      - **Web:**
+        - `lib/activity-format.ts` turns every logged action code into a sentence, falling back to the raw code. A test lists all codes.
+        - `ActivityHistory` component, with a History section on the execution and bug details.
+        - A remove button on Draft run rows.
+        - The test case's Run is now a menu: "New execution" or "Add to existing execution…", whose dialog marks Drafts that already hold the test case.
+    - **Key decisions / discoveries:**
+      - History query keys sit under each item's detail key. `useApplyExecution` now also refetches everything nested under an execution's detail (history, run attempts), so the user's own changes don't depend on the live stream. That fixes stale attempt lists from Slice 1 too.
+      - `run.bugs.changed` also refreshes the execution's history.
+      - An outcome and its auto-created bug share one transaction's timestamp, so their order in History is arbitrary.
+      - `canReorderRuns` became `canEditDraftRuns`.
+      - The add dialog reads each Draft's detail to find the ones holding the test case, sharing the Executions screen's cache.
+    - **Deferred / out of scope:**
+      - the project-wide Activity screen and the Overview's recent history (Phase 9)
+      - an index on activity `details`, if logs grow
+      - a server-side filter for Drafts that don't hold a test case, if Drafts pile up
+      - the traceability graph
 
 ## Phase 8 — Bugs 🚧
 
 Bug CRUD, image attachments (S3/R2 presigned, server-side validation per F8), linked run/test case snapshots, auto-create-on-failure (resolves G8). Depends on Executions (run linkage) and Secrets/storage.
 
 - **Covered by MVP Phase 8:** bug CRUD, run/test case snapshots with failed step, auto-create on failure (G8) and status rules (G4), both in [ADR 0013](adr/0013-bug-lifecycle-and-auto-creation.md); Bugs screen and run-panel bug links.
-- **Remaining:** image attachments (needs E3 and F8); tags on bugs (after Phase 4's tags); the bug activity panel; Bugs dashboard and PDF; unlinking or moving a bug between runs.
+- **Remaining:** image attachments (needs E3 and F8); tags on bugs (after Phase 4's tags); Bugs dashboard and PDF; unlinking or moving a bug between runs.
 
 ## Phase 9 — Activity feed UI, Trash UI, Dashboards ⬜
 

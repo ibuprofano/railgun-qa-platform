@@ -6,6 +6,7 @@ import request from 'supertest';
 import { createTestPrismaClient } from './helpers/prisma-test-client';
 import { createWorkspaceWithProject, type WorkspaceFixture } from './helpers/cross-tenant-harness';
 import { activityCodesFor, insertTestCases, setUpProjectMember, sleep } from './helpers/execution-fixtures';
+import { startLiveListener } from './helpers/live-listener';
 import { withTenantContext } from '../src/common/tenant-context';
 
 jest.mock('@clerk/backend', () => ({
@@ -341,6 +342,189 @@ describe('executions: lifecycle (e2e, specs/test-execution-lifecycle)', () => {
       const s = await completed('Life-SignOffContrib', ['Pass']);
 
       expect((await api().post(`${s.base}/sign-off`).set(as(s.contributor))).status).toBe(403);
+    });
+  });
+
+  it('stores who set an outcome by name, for attempt history (ADR 0020)', async () => {
+    const s = await setUp('Life-OutcomeName', 1);
+    await start(s);
+    const [run] = await runIds(s);
+
+    await setOutcome(s, run, 'Pass');
+
+    const [row] = await withTenantContext(prisma, s.workspaceId, (tx) =>
+      tx.$queryRaw<{ outcome_updated_by_name: string | null }[]>`
+        SELECT outcome_updated_by_name FROM test_run WHERE id = ${run}::uuid
+      `,
+    );
+    expect(row.outcome_updated_by_name).toEqual(expect.any(String));
+    expect(row.outcome_updated_by_name).not.toBe('');
+  });
+
+  describe('Cancel (ADR 0019)', () => {
+    it('cancels an In Progress execution: timer stops, Pending runs stay Pending, outcomes lock', async () => {
+      const s = await setUp('Life-Cancel', 3);
+      await start(s);
+      const [first, second] = await runIds(s);
+      await setOutcome(s, first, 'Pass');
+      await sleep(20);
+
+      const response = await api().post(`${s.base}/cancel`).set(as(s.contributor));
+      await sleep(20);
+      const later = await api().get(s.base).set(as(s.viewer));
+      const lockedPass = await setOutcome(s, first, 'Fail');
+      const lockedPending = await setOutcome(s, second, 'Pass');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ status: 'Canceled', lastResumedAt: null });
+      expect(response.body.elapsedMsAccumulated).toBeGreaterThan(0);
+      expect(later.body.elapsedMsAccumulated).toBe(response.body.elapsedMsAccumulated);
+      expect(later.body.runs.map((r: { outcome: string }) => r.outcome)).toEqual(['Pass', 'Pending', 'Pending']);
+      expect(lockedPass.status).toBe(409);
+      expect(lockedPending.status).toBe(409);
+      expect((await api().get(s.base).set(as(s.viewer))).body.runs[0].outcome).toBe('Pass');
+    });
+
+    it('cancels a Paused execution, keeping its elapsed time, and logs the source status', async () => {
+      const s = await setUp('Life-CancelPaused');
+      await start(s);
+      await sleep(20);
+      const paused = await api().post(`${s.base}/pause`).set(as(s.contributor));
+
+      const response = await api().post(`${s.base}/cancel`).set(as(s.contributor));
+
+      expect(response.body.status).toBe('Canceled');
+      expect(response.body.elapsedMsAccumulated).toBe(paused.body.elapsedMsAccumulated);
+      const entry = await withTenantContext(prisma, s.workspaceId, (tx) =>
+        tx.$queryRaw<{ details: unknown }[]>`
+          SELECT details FROM activity_entries
+          WHERE entity_id = ${s.executionId}::uuid AND action_code = 'test_execution.canceled'
+        `,
+      );
+      expect(entry).toEqual([{ details: { from: 'Paused', to: 'Canceled' } }]);
+    });
+
+    it('refuses Cancel on a Completed execution (409)', async () => {
+      const s = await setUp('Life-CancelCompleted', 1);
+      await start(s);
+      const [run] = await runIds(s);
+      await setOutcome(s, run, 'Pass');
+
+      const response = await api().post(`${s.base}/cancel`).set(as(s.contributor));
+
+      expect(response.status).toBe(409);
+      expect((await api().get(s.base).set(as(s.viewer))).body.status).toBe('Completed');
+    });
+
+    it('a Viewer cannot cancel (403)', async () => {
+      const s = await setUp('Life-CancelViewer');
+      await start(s);
+
+      expect((await api().post(`${s.base}/cancel`).set(as(s.viewer))).status).toBe(403);
+      expect((await api().get(s.base).set(as(s.viewer))).body.status).toBe('InProgress');
+    });
+
+    it('emits execution.changed on Cancel and nothing on a refused Cancel', async () => {
+      const listener = await startLiveListener();
+      try {
+        const s = await setUp('Life-CancelLive');
+        await listener.take();
+        const ofProject = async () => (await listener.take()).filter((e) => e.projectId === s.projectId);
+
+        const refused = await api().post(`${s.base}/cancel`).set(as(s.contributor));
+        const refusedEvents = await ofProject();
+        await start(s);
+        await listener.take();
+        await api().post(`${s.base}/cancel`).set(as(s.contributor));
+
+        expect(refused.status).toBe(409);
+        expect(refusedEvents).toEqual([]);
+        expect(await ofProject()).toEqual([
+          { type: 'execution.changed', workspaceId: s.workspaceId, projectId: s.projectId, executionId: s.executionId },
+        ]);
+      } finally {
+        await listener.close();
+      }
+    });
+  });
+
+  describe('live events (specs/live-updates)', () => {
+    it('each transition and each outcome emits execution.changed', async () => {
+      const listener = await startLiveListener();
+      try {
+        const s = await setUp('Life-Live', 1);
+        const ofProject = async () => (await listener.take()).filter((e) => e.projectId === s.projectId);
+        const changed = [
+          { type: 'execution.changed', workspaceId: s.workspaceId, projectId: s.projectId, executionId: s.executionId },
+        ];
+        await listener.take();
+
+        for (const action of ['mark-ready', 'back-to-draft', 'mark-ready']) {
+          await api().post(`${s.base}/${action}`).set(as(s.contributor));
+          expect(await ofProject()).toEqual(changed);
+        }
+        await api().post(`${s.base}/run-all`).set(as(s.contributor)).send({ mode: 'Manual' });
+        expect(await ofProject()).toEqual(changed);
+        await api().post(`${s.base}/pause`).set(as(s.contributor));
+        expect(await ofProject()).toEqual(changed);
+        await api().post(`${s.base}/resume`).set(as(s.contributor));
+        expect(await ofProject()).toEqual(changed);
+        const [run] = await runIds(s);
+        await setOutcome(s, run, 'Pass');
+        expect(await ofProject()).toEqual(changed);
+        await api().post(`${s.base}/sign-off`).set(as(s.admin));
+        expect(await ofProject()).toEqual(changed);
+      } finally {
+        await listener.close();
+      }
+    });
+
+    it('a refused transition (409) emits nothing', async () => {
+      const listener = await startLiveListener();
+      try {
+        const s = await setUp('Life-LiveRefused');
+        await listener.take();
+
+        const refused = await api().post(`${s.base}/pause`).set(as(s.contributor));
+
+        expect(refused.status).toBe(409);
+        expect((await listener.take()).filter((e) => e.projectId === s.projectId)).toEqual([]);
+      } finally {
+        await listener.close();
+      }
+    });
+
+    it('Fail with auto-create on also emits run.bugs.changed for that run, once', async () => {
+      const listener = await startLiveListener();
+      try {
+        const f = await createWorkspaceWithProject(prisma, `Life-LiveBug-${randomUUID().slice(0, 8)}`);
+        const contributor = await setUpProjectMember(prisma, f.workspaceId, f.projectId, 'Contributor');
+        const testCaseIds = await insertTestCases(prisma, f.workspaceId, f.projectId, ['A', 'B']);
+        const created = await api()
+          .post(`/projects/${f.projectId}/executions`)
+          .set(as(contributor))
+          .send({ name: 'AutoBug', testCaseIds, autoCreateBug: true });
+        const base = `/projects/${f.projectId}/executions/${created.body.id}`;
+        await api().post(`${base}/mark-ready`).set(as(contributor));
+        await api().post(`${base}/run-all`).set(as(contributor)).send({ mode: 'Manual' });
+        const [run] = created.body.runs.map((r: { id: string }) => r.id);
+        await listener.take();
+        const scope = { workspaceId: f.workspaceId, projectId: f.projectId, executionId: created.body.id };
+
+        await api().patch(`${base}/runs/${run}`).set(as(contributor)).send({ outcome: 'Fail' });
+        const first = (await listener.take()).filter((e) => e.projectId === f.projectId);
+        // Failing it again finds the bug already there, so only the outcome change is announced.
+        await api().patch(`${base}/runs/${run}`).set(as(contributor)).send({ outcome: 'Fail' });
+        const second = (await listener.take()).filter((e) => e.projectId === f.projectId);
+
+        expect(first).toEqual([
+          { type: 'run.bugs.changed', ...scope, runId: run },
+          { type: 'execution.changed', ...scope },
+        ]);
+        expect(second).toEqual([{ type: 'execution.changed', ...scope }]);
+      } finally {
+        await listener.close();
+      }
     });
   });
 });

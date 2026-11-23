@@ -291,7 +291,7 @@ export async function seedDemo(
         runRows.push([
           runId, executionId, workspaceId, id(`test_case:${run.testCaseKey}`), index + 1, outcome,
           started ? testCase.name : null, started ? testCase.gherkin : null,
-          outcomeAt, outcomeAt ? people[by].id : null, at(e.createdDaysAgo),
+          outcomeAt, outcomeAt ? people[by].id : null, at(e.createdDaysAgo), outcomeAt ? people[by].name : null,
         ]);
       });
 
@@ -344,7 +344,7 @@ export async function seedDemo(
       [
         ['id', 'uuid'], ['execution_id', 'uuid'], ['workspace_id', 'uuid'], ['test_case_id', 'uuid'], ['position', 'integer'],
         ['outcome'], ['test_case_name_snapshot'], ['gherkin_script_snapshot'], ['outcome_updated_at', 'timestamptz'],
-        ['outcome_updated_by', 'uuid'], ['created_at', 'timestamptz'],
+        ['outcome_updated_by', 'uuid'], ['created_at', 'timestamptz'], ['outcome_updated_by_name'],
       ],
       runRows,
     );
@@ -376,7 +376,7 @@ export async function seedDemo(
       return [
         bugId, projectId, workspaceId, b.title, b.severity, b.status, b.description, b.stepsToReproduce,
         run?.runId ?? null, b.run ? id(`test_case:${b.run.testCaseKey}`) : null, run?.name ?? null, run?.gherkin ?? null,
-        b.failedStep, people[reporter].id, people[reporter].name, b.autoCreated, createdAt, updatedAt,
+        b.failedStep, people[reporter].id, people[reporter].name, b.autoCreated, createdAt, updatedAt, run ? 1 : null,
       ];
     });
     await insertRows(
@@ -386,7 +386,7 @@ export async function seedDemo(
         ['id', 'uuid'], ['project_id', 'uuid'], ['workspace_id', 'uuid'], ['title'], ['severity'], ['status'], ['description'],
         ['steps_to_reproduce'], ['test_run_id', 'uuid'], ['test_case_id', 'uuid'], ['test_case_name_snapshot'], ['gherkin_snapshot'],
         ['failed_step_snapshot'], ['reporter_id', 'uuid'], ['reporter_display_name'], ['auto_created', 'boolean'],
-        ['created_at', 'timestamptz'], ['updated_at', 'timestamptz'],
+        ['created_at', 'timestamptz'], ['updated_at', 'timestamptz'], ['attempt', 'integer'],
       ],
       bugRows,
     );

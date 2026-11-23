@@ -14,7 +14,7 @@ import { AUTO_CREATED_SEVERITY, type BugSeverity, type BugStatus } from './bug-r
 const BUG_SELECT = Prisma.sql`
   SELECT b.id, b.title, b.severity, b.status, b.description, b.steps_to_reproduce,
          b.test_case_name_snapshot, b.gherkin_snapshot, b.failed_step_snapshot,
-         b.reporter_display_name, b.auto_created, b.created_at, b.updated_at,
+         b.reporter_display_name, b.auto_created, b.created_at, b.updated_at, b.attempt,
          b.test_run_id, r.position AS run_position, r.outcome AS run_outcome,
          e.id AS execution_id, e.name AS execution_name, (e.deleted_at IS NOT NULL) AS execution_deleted,
          b.test_case_id, (tc.deleted_at IS NOT NULL) AS test_case_deleted,
@@ -39,6 +39,7 @@ interface BugRow {
   auto_created: boolean;
   created_at: Date;
   updated_at: Date;
+  attempt: number | null;
   test_run_id: string | null;
   run_position: number | null;
   run_outcome: RunOutcome | null;
@@ -64,6 +65,8 @@ export interface BugResponse {
   autoCreated: boolean;
   createdAt: string;
   updatedAt: string;
+  /** The execution attempt the bug was found in (ADR 0020); null if never tied to a run. */
+  attempt: number | null;
   run: {
     id: string;
     executionId: string;
@@ -93,6 +96,7 @@ function toResponse(row: BugRow): BugResponse {
     autoCreated: row.auto_created,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
+    attempt: row.attempt,
     run:
       row.test_run_id && row.execution_id
         ? {
@@ -137,9 +141,12 @@ export async function loadBug(tx: Prisma.TransactionClient, projectId: string, b
 
 export interface StartedRun {
   id: string;
+  executionId: string;
   testCaseId: string | null;
   testCaseName: string | null;
   gherkinScript: string | null;
+  /** The execution's current attempt, recorded on a bug tied to this run (ADR 0020). */
+  attempt: number;
 }
 
 /**
@@ -153,9 +160,16 @@ export async function loadStartedRun(
   runId: string,
 ): Promise<StartedRun> {
   const rows = await tx.$queryRaw<
-    { id: string; test_case_id: string | null; test_case_name_snapshot: string | null; gherkin_script_snapshot: string | null }[]
+    {
+      id: string;
+      execution_id: string;
+      test_case_id: string | null;
+      test_case_name_snapshot: string | null;
+      gherkin_script_snapshot: string | null;
+      attempt: number;
+    }[]
   >`
-    SELECT r.id, r.test_case_id, r.test_case_name_snapshot, r.gherkin_script_snapshot
+    SELECT r.id, r.execution_id, r.test_case_id, r.test_case_name_snapshot, r.gherkin_script_snapshot, e.attempt
     FROM test_run r JOIN test_execution e ON e.id = r.execution_id
     WHERE r.id = ${runId}::uuid AND e.project_id = ${projectId}::uuid AND e.deleted_at IS NULL
       AND e.status NOT IN ('Draft', 'Ready')
@@ -166,10 +180,27 @@ export async function loadStartedRun(
   const [row] = rows;
   return {
     id: row.id,
+    executionId: row.execution_id,
     testCaseId: row.test_case_id,
     testCaseName: row.test_case_name_snapshot,
     gherkinScript: row.gherkin_script_snapshot,
+    attempt: row.attempt,
   };
+}
+
+/**
+ * The run a bug is linked to and that run's execution, or null for a bug with no run.
+ * Reads deleted bugs too, so a delete can still announce the run it leaves.
+ */
+export async function linkedRunOf(
+  tx: Prisma.TransactionClient,
+  bugId: string,
+): Promise<{ runId: string; executionId: string } | null> {
+  const rows = await tx.$queryRaw<{ run_id: string; execution_id: string }[]>`
+    SELECT r.id AS run_id, r.execution_id FROM bug b JOIN test_run r ON r.id = b.test_run_id
+    WHERE b.id = ${bugId}::uuid
+  `;
+  return rows.length > 0 ? { runId: rows[0].run_id, executionId: rows[0].execution_id } : null;
 }
 
 /** Writes one Bugs-category activity entry in the caller's transaction (ADR 0007). */
@@ -196,28 +227,32 @@ export function logBugActivity(
 
 /**
  * Auto-creates the bug for a run just set to Fail (ADR 0013 decision 2), from the run's
- * own snapshot. The partial unique index on (test_run_id) WHERE auto_created makes a
- * second attempt a no-op, so this logs only when a bug was actually inserted.
+ * own snapshot. The partial unique index on (test_run_id, attempt) WHERE auto_created
+ * makes a second failure in the same attempt a no-op (ADR 0020 decision 6), so this
+ * logs (and returns true) only when a bug was actually inserted.
  */
 export async function autoCreateBugForRun(
   tx: Prisma.TransactionClient,
   actor: ExecutionActor,
   runId: string,
-): Promise<void> {
+): Promise<boolean> {
   const inserted = await tx.$queryRaw<{ id: string; title: string }[]>`
     INSERT INTO bug (
       project_id, workspace_id, title, severity, test_run_id, test_case_id,
-      test_case_name_snapshot, gherkin_snapshot, reporter_id, reporter_display_name, auto_created
+      test_case_name_snapshot, gherkin_snapshot, reporter_id, reporter_display_name, auto_created, attempt
     )
     SELECT ${actor.projectId}::uuid, ${actor.workspaceId}::uuid,
            COALESCE(r.test_case_name_snapshot, 'Failed run'), ${AUTO_CREATED_SEVERITY}, r.id, r.test_case_id,
            r.test_case_name_snapshot, r.gherkin_script_snapshot, ${actor.userId}::uuid,
-           ${actor.displayName ?? 'Unknown user'}, true
-    FROM test_run r WHERE r.id = ${runId}::uuid
-    ON CONFLICT (test_run_id) WHERE auto_created AND deleted_at IS NULL DO NOTHING
+           ${actor.displayName ?? 'Unknown user'}, true, e.attempt
+    FROM test_run r JOIN test_execution e ON e.id = r.execution_id
+    WHERE r.id = ${runId}::uuid
+    ON CONFLICT (test_run_id, attempt) WHERE auto_created AND deleted_at IS NULL DO NOTHING
     RETURNING id, title
   `;
-  if (inserted.length > 0) {
-    await logBugActivity(tx, actor, 'bug.created', inserted[0], { auto: true, testRunId: runId });
+  if (inserted.length === 0) {
+    return false;
   }
+  await logBugActivity(tx, actor, 'bug.created', inserted[0], { auto: true, testRunId: runId });
+  return true;
 }

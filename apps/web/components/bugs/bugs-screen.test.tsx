@@ -9,6 +9,7 @@ import { useSessionContext } from '../../lib/session-context';
 import { renderWithProviders } from '../../test/render-with-providers';
 import { makeBug } from '../../test/bug-fixtures';
 import { makeRun } from '../../test/execution-fixtures';
+import { listBugActivity } from '../../lib/activity-api';
 
 const replace = vi.fn();
 let search = new URLSearchParams();
@@ -19,6 +20,10 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => search,
 }));
 vi.mock('../../lib/session-context', () => ({ useSessionContext: vi.fn() }));
+vi.mock('../../lib/activity-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/activity-api')>()),
+  listBugActivity: vi.fn(async () => ({ entries: [], nextCursor: null })),
+}));
 vi.mock('../../lib/api-client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api-client')>()),
   useApiClient: () => ({ request: vi.fn() }),
@@ -183,6 +188,29 @@ describe('BugDetail', () => {
 
     await waitFor(() => expect(updateBug).toHaveBeenCalledWith(expect.anything(), 'p1', 'bug-linked', { status: 'InProgress' }));
     expect((await screen.findByLabelText('Status')).textContent).toContain('In Progress');
+  });
+
+  it('shows the bug history and refetches it after an edit', async () => {
+    vi.mocked(getBug).mockResolvedValue(linkedBug);
+    vi.mocked(updateBug).mockResolvedValue({ ...linkedBug, severity: 'Critical' });
+    vi.mocked(listBugActivity).mockResolvedValue({
+      entries: [
+        {
+          id: 'a1', actorName: 'Ana', actionCode: 'bug.created', entityType: 'bug', entityId: 'bug-linked',
+          entityName: linkedBug.title, details: null, createdAt: '2026-11-23T10:00:00.000Z',
+        },
+      ],
+      nextCursor: null,
+    });
+    renderDetail('Contributor');
+
+    const history = await screen.findByRole('region', { name: 'Bug history' });
+    expect(await within(history).findByText(`filed bug “${linkedBug.title}”`)).toBeTruthy();
+    const callsBefore = vi.mocked(listBugActivity).mock.calls.length;
+    fireEvent.click(await screen.findByLabelText('Status'));
+    fireEvent.click(await screen.findByRole('option', { name: 'In Progress' }));
+
+    await waitFor(() => expect(vi.mocked(listBugActivity).mock.calls.length).toBeGreaterThan(callsBefore));
   });
 
   it('a Contributor adds a tag from the detail and the full set is saved', async () => {

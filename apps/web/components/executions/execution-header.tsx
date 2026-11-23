@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import type { Execution } from '../../lib/executions-api';
+import { attemptOf, type Execution } from '../../lib/executions-api';
 import { formatElapsed } from '../../lib/elapsed-time';
 import { useElapsed } from '../../lib/use-elapsed';
 import { StatusBadge } from './status-badge';
@@ -29,6 +29,11 @@ export function ExecutionHeader({ execution, onOpenEnvironment, actions }: Execu
       </div>
       <div className="flex items-center gap-3">
         <StatusBadge status={execution.status} />
+        {attemptOf(execution) > 1 && (
+          <span className="rounded-md border px-2 py-0.5 text-xs font-medium text-muted-foreground">
+            Attempt {attemptOf(execution)}
+          </span>
+        )}
         <span className="font-mono text-sm tabular-nums" aria-label="Elapsed time">
           {formatElapsed(elapsed)}
         </span>

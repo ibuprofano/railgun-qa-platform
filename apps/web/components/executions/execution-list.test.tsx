@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, within } from '@testing-library/react';
-import { ExecutionList } from './execution-list';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, screen, within } from '@testing-library/react';
+import { ExecutionList, LIST_REFETCH_MS } from './execution-list';
+import { useLiveConnected } from '../../lib/live-updates';
 import { listExecutions } from '../../lib/executions-api';
 import { renderWithProviders } from '../../test/render-with-providers';
 import { makeExecution } from '../../test/execution-fixtures';
@@ -18,6 +19,8 @@ vi.mock('../../lib/executions-api', async (importOriginal) => ({
   listExecutions: vi.fn(),
 }));
 
+vi.mock('../../lib/live-updates', () => ({ useLiveConnected: vi.fn(() => false) }));
+
 const mockedList = vi.mocked(listExecutions);
 
 function renderList(canCreate: boolean, onCreateClick = vi.fn()) {
@@ -26,6 +29,41 @@ function renderList(canCreate: boolean, onCreateClick = vi.fn()) {
   );
   return { onCreateClick };
 }
+
+describe('ExecutionList polling', () => {
+  beforeEach(() => {
+    mockedList.mockReset().mockResolvedValue([makeExecution({ id: 'a', name: 'Running', status: 'InProgress' })]);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.mocked(useLiveConnected).mockReturnValue(false);
+  });
+
+  it('refetches while an execution is under way and the live stream is down', async () => {
+    renderList(false);
+    await screen.findByText('Running');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(LIST_REFETCH_MS);
+    });
+
+    expect(mockedList).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not poll while the live stream is connected', async () => {
+    vi.mocked(useLiveConnected).mockReturnValue(true);
+    renderList(false);
+    await screen.findByText('Running');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(LIST_REFETCH_MS * 3);
+    });
+
+    expect(mockedList).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('ExecutionList', () => {
   beforeEach(() => {

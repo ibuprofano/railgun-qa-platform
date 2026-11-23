@@ -9,6 +9,7 @@ import { useApplyExecution } from '../../lib/use-execution-cache';
 import { ActionError } from '../action-error';
 import { OUTCOME_LABELS, OutcomeBadge } from './status-badge';
 import { RunBugs } from './run-bugs';
+import { RunAttempts } from './run-attempts';
 import { bugKeys } from '../../lib/bugs-api';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
@@ -87,6 +88,7 @@ export function RunPanel({ projectId, execution, runId, role, onClose }: RunPane
                   <ActionError error={record.error} />
                 </div>
               )}
+              <RunAttempts projectId={projectId} execution={execution} run={run} />
               <RunBugs projectId={projectId} execution={execution} run={run} role={role} />
             </div>
           </>

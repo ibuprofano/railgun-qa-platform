@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canCreateExecution, canRecordOutcome, executionActionsFor } from './execution-permissions';
+import { canCreateExecution, canRecordOutcome, canRestart, executionActionsFor } from './execution-permissions';
 import type { ExecutionStatus } from './executions-api';
 import type { ProjectRole } from './test-case-permissions';
 
@@ -10,20 +10,20 @@ const EXPECTED: Record<ProjectRole, Record<ExecutionStatus, string[]>> = {
   Contributor: {
     Draft: ['edit', 'markReady'],
     Ready: ['backToDraft', 'runAll'],
-    InProgress: ['pause'],
-    Paused: ['resume'],
-    Completed: [],
-    Done: [],
-    Canceled: [],
+    InProgress: ['pause', 'cancel'],
+    Paused: ['resume', 'cancel'],
+    Completed: ['tryAgain'],
+    Done: ['tryAgain'],
+    Canceled: ['tryAgain'],
   },
   Admin: {
     Draft: ['edit', 'markReady', 'delete'],
     Ready: ['backToDraft', 'runAll'],
-    InProgress: ['pause'],
-    Paused: ['resume'],
-    Completed: ['signOff'],
-    Done: [],
-    Canceled: [],
+    InProgress: ['pause', 'cancel'],
+    Paused: ['resume', 'cancel'],
+    Completed: ['signOff', 'tryAgain'],
+    Done: ['tryAgain'],
+    Canceled: ['tryAgain'],
   },
 };
 
@@ -36,6 +36,20 @@ describe('executionActionsFor', () => {
 
   it('offers nothing without a role', () => {
     expect(executionActionsFor('Draft', null)).toEqual([]);
+  });
+});
+
+describe('canRestart', () => {
+  it('lets a Contributor restart Completed or Canceled, but not Done', () => {
+    expect(STATUSES.filter((status) => canRestart(status, 'Contributor'))).toEqual(['Completed', 'Canceled']);
+  });
+
+  it('lets an Admin restart Completed, Done or Canceled', () => {
+    expect(STATUSES.filter((status) => canRestart(status, 'Admin'))).toEqual(['Completed', 'Done', 'Canceled']);
+  });
+
+  it('never lets a Viewer restart', () => {
+    expect(STATUSES.some((status) => canRestart(status, 'Viewer') || canRestart(status, null))).toBe(false);
   });
 });
 

@@ -27,6 +27,7 @@ Every push need is **one-way, server to browser**. Commands travel as ordinary r
 **Real-time**
 - The API exposes SSE streams. Events carry only an event type and identifiers (small payloads); the client refetches or patches state through the normal API. **State is the source of truth; events are hints**, so a missed event is repaired by refetching on reconnect.
 - One multiplexed stream per browser tab, with channels per execution and per user (for pending invitations), to stay within browser connection limits.
+  - *Implemented (`sse-live-updates`, 2026-11-10):* the stream is project-scoped, `GET /projects/:projectId/events`. It carries every execution event of that project, and the client applies the ones it has cached, so the per-execution channel is a filter on the client. An execution is visible to exactly its project's members, so a separate per-execution check would repeat the project check. The per-user channel arrives with invitations.
 - Authorisation is checked when a stream opens and per channel, under the tenant context from ADR 0003.
 - Fan-out across several API instances uses Postgres `LISTEN/NOTIFY` on a direct (non-pooled) connection. Payloads are identifiers only, well under the notification size limit. A single API instance is acceptable for v1.
 
@@ -69,6 +70,9 @@ Every push need is **one-way, server to browser**. Commands travel as ordinary r
 
 ## Open Items
 
-- Stream authentication approach (fetch-based client versus stream tickets), decided together with the ADR 0002 bearer-versus-cookie item.
+- ~~Stream authentication approach (fetch-based client versus stream tickets), decided together with the ADR 0002 bearer-versus-cookie item.~~ Resolved by [ADR 0009](0009-api-authentication-transport.md) and built by the `sse-live-updates` change:
+  - A fetch-based client sends the same Clerk bearer token as every request.
+  - Access is checked when the stream opens.
+  - The server closes each stream after 5 minutes, so the client reconnects and access is checked again.
 - ~~Final queue library choice (pg-boss versus Graphile Worker), validated against the ORM and the pooler.~~ Resolved by [ADR 0018](0018-queue-library.md): Graphile Worker.
 - Where the worker process runs in the hosting layout.

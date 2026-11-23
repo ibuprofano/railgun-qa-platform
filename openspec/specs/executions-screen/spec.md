@@ -62,7 +62,7 @@ The detail header SHALL show the execution's elapsed time, advancing every secon
 - **THEN** the timer reads 1:30 and does not advance
 
 ### Requirement: Lifecycle actions are offered by status and role
-The detail view SHALL offer only the actions valid for the execution's status: Edit, Mark as Ready, and Delete for Draft; Back to Draft and Run All for Ready; Pause for In Progress; Resume for Paused; Sign Off for Completed. Edit, Mark as Ready, Back to Draft, Run All, Pause, and Resume SHALL be shown to Contributors and Admins; Delete and Sign Off only to Admins; none to Viewers.
+The detail view SHALL offer only the actions valid for the execution's status: Edit, Mark as Ready, and Delete for Draft; Back to Draft and Run All for Ready; Pause and Cancel for In Progress; Resume and Cancel for Paused; Sign Off and Try Again for Completed; Try Again for Done and Canceled. Edit, Mark as Ready, Back to Draft, Run All, Pause, Resume, Cancel, and Try Again SHALL be shown to Contributors and Admins; Delete and Sign Off only to Admins; none to Viewers. On a Done execution, Try Again SHALL offer Restart only to Admins.
 
 #### Scenario: Contributor on a Ready execution
 - **WHEN** a Contributor views a Ready execution
@@ -74,7 +74,15 @@ The detail view SHALL offer only the actions valid for the execution's status: E
 
 #### Scenario: Admin on a Completed execution
 - **WHEN** an Admin views a Completed execution
-- **THEN** Sign Off is offered
+- **THEN** Sign Off and Try Again are offered
+
+#### Scenario: Contributor on an In Progress execution
+- **WHEN** a Contributor views an In Progress execution
+- **THEN** Pause and Cancel are offered
+
+#### Scenario: Contributor on a Done execution
+- **WHEN** a Contributor opens Try Again on a Done execution
+- **THEN** Duplicate is offered and Restart is not
 
 ### Requirement: Run All asks for the execution mode
 Run All SHALL ask the user to confirm the mode. Manual SHALL start the execution; Automated SHALL be shown as currently unavailable and cannot be chosen.
@@ -106,11 +114,27 @@ Selecting a run SHALL open a panel showing its test case name and Gherkin script
 - **THEN** no outcome control is offered
 
 ### Requirement: Execution views stay current while work is under way
-While the selected execution is In Progress or Paused, its detail SHALL refresh at least every 5 seconds without user action, and the list SHALL refresh while any listed execution is In Progress or Paused. Changes made by the user themselves SHALL appear immediately.
+The Executions screen SHALL refresh its list, the selected execution's detail and a run's linked bugs when the project's live event stream reports a change to them, without user action. While the stream is not connected, the selected execution's detail SHALL refresh at least every 5 seconds while it is In Progress or Paused. The list SHALL also refresh while any listed execution is In Progress or Paused. While the stream is connected, the screen SHALL NOT poll. Changes made by the user themselves SHALL appear immediately.
 
 #### Scenario: A colleague records an outcome
 - **WHEN** another tester records an outcome on the In Progress execution the user is viewing
 - **THEN** the user's view shows that outcome within 5 seconds, without reloading the page
+
+#### Scenario: A colleague starts an execution
+- **WHEN** another tester runs a Ready execution while the user has the Executions screen open with the stream connected
+- **THEN** the list shows it In Progress within 5 seconds, without reloading the page
+
+#### Scenario: A bug is auto-created on a run the user has open
+- **WHEN** another tester sets a run to Fail with auto-create bug on, while the user has that run's panel open
+- **THEN** the panel lists the new bug without a page reload
+
+#### Scenario: No polling while connected
+- **WHEN** the stream is connected and the selected execution is In Progress with no changes
+- **THEN** the screen sends no periodic refetch requests
+
+#### Scenario: Stream unavailable
+- **WHEN** the stream cannot connect and the selected execution is In Progress
+- **THEN** its detail is refetched at least every 5 seconds until the stream connects again
 
 ### Requirement: Contributors create and edit Draft executions in a form
 Contributors and Admins SHALL be able to create an execution, and edit a Draft one, in a form with: name (required), description, test cases (one or more, Ready test cases only), environment (optional), browser, viewport width and height, locale, timezone, and auto-create-bug-on-failure. Test cases are picked from the project's folder tree, and the order of the Selected panel becomes the run order. A new execution opens selected, in Draft.
@@ -166,10 +190,10 @@ Opening an execution's environment SHALL show the environment's name, base URL, 
 - **THEN** the environment name is shown as no longer available and cannot be opened
 
 ### Requirement: A Ready test case can be run directly from the Test Cases screen
-For Contributors and Admins, a Ready test case's detail SHALL offer Run, which opens the new-execution form with that test case already picked. Run SHALL not be offered for Draft or Deprecated test cases, or to Viewers.
+For Contributors and Admins, a Ready test case's detail SHALL offer Run with two choices: "New execution", which opens the new-execution form with that test case already picked, and "Add to existing execution…", which adds it to a Draft execution. Run SHALL not be offered for Draft or Deprecated test cases, or to Viewers.
 
 #### Scenario: Running a test case
-- **WHEN** a Contributor selects Run on a Ready test case and saves the form with a name
+- **WHEN** a Contributor selects Run → New execution on a Ready test case and saves the form with a name
 - **THEN** a Draft execution containing that test case is created, and the user is on the Executions screen with it selected
 
 #### Scenario: Not offered for a Draft test case
@@ -177,11 +201,15 @@ For Contributors and Admins, a Ready test case's detail SHALL offer Run, which o
 - **THEN** Run is not offered
 
 ### Requirement: The run panel shows the bugs linked to that run
-The run side panel SHALL list the bugs linked to the run, each with its title, status, and severity, and each navigating to that bug on the Bugs screen.
+The run side panel SHALL list the bugs linked to the run, each with its title, status, and severity, and each navigating to that bug on the Bugs screen. When the execution has been restarted, the bugs SHALL be grouped by the attempt they were found in, the current attempt first.
 
 #### Scenario: A run with a bug
 - **WHEN** a project member opens a run that has one linked bug
 - **THEN** the panel lists that bug, and selecting it opens it on the Bugs screen
+
+#### Scenario: Bugs from two attempts
+- **WHEN** a project member opens a run at attempt 2 with one bug from attempt 1 and one from attempt 2
+- **THEN** the panel lists the attempt 2 bug under the current attempt and the attempt 1 bug under attempt 1
 
 ### Requirement: Contributors file a bug from a run, naming the failed step
 Once the execution has started, the run panel SHALL offer Contributors and Admins **File bug**, which opens the new-bug form pre-filled with the run's test case name as title and showing the run's script, from which the reporter MAY pick the failed step. Saving files the bug against that run.
@@ -284,3 +312,100 @@ For Contributors and Admins, the runs table of a Draft execution SHALL let each 
 #### Scenario: A refused move
 - **WHEN** a Contributor drops a run but another user has meanwhile marked the execution Ready
 - **THEN** the screen shows that only a Draft execution's runs can be reordered, and the table keeps the order it had
+
+### Requirement: Cancel asks for confirmation
+Cancel SHALL ask the user to confirm, saying that runs not yet run stay Pending and outcomes can no longer be changed. Confirming SHALL cancel the execution and stop its timer.
+
+#### Scenario: Canceling after confirming
+- **WHEN** a Contributor chooses Cancel on an In Progress execution and confirms
+- **THEN** the execution shows as Canceled, its timer no longer runs, and the run panel no longer offers outcome controls
+
+#### Scenario: Backing out
+- **WHEN** a Contributor chooses Cancel and dismisses the confirmation
+- **THEN** the execution is unchanged
+
+### Requirement: Try Again offers Restart and Duplicate
+Try Again SHALL let the user choose Restart or Duplicate. Restart SHALL ask for confirmation, explaining that results move to attempt history and the execution returns to Ready, and naming the runs that will be dropped because their test case was deleted. When every test case was deleted, Restart SHALL be unavailable with the reason shown.
+
+#### Scenario: Restarting
+- **WHEN** a Contributor chooses Try Again on a Canceled execution, picks Restart, and confirms
+- **THEN** the execution shows as Ready at attempt 2 with every run Pending
+
+#### Scenario: The confirmation names dropped runs
+- **WHEN** a Contributor picks Restart on an execution where one run's test case was deleted
+- **THEN** the confirmation names that run as one that will be dropped
+
+#### Scenario: Nothing left to restart
+- **WHEN** a Contributor opens Try Again on an execution whose every test case was deleted
+- **THEN** Restart is unavailable with the reason, and Duplicate is still offered
+
+### Requirement: Duplicate opens the execution form pre-filled from the source
+Duplicate SHALL open the New Execution form named "<source name> (retry)", with the source's run conditions and every eligible test case selected in the source's run order. Test cases that were deleted or are no longer Ready SHALL be listed as not carried over, each with its reason. Saving SHALL create a new Draft execution and leave the source unchanged.
+
+#### Scenario: Duplicating with a deprecated test case
+- **WHEN** a Contributor duplicates a Done execution "Smoke" whose runs are A, B and C, after B was changed to Deprecated
+- **THEN** the form is named "Smoke (retry)" with A and C selected, and B is listed as not carried over because it is no longer Ready
+
+#### Scenario: Saving the duplicate
+- **WHEN** the Contributor unticks C and saves
+- **THEN** a new Draft execution with A only is created and selected, and "Smoke" is unchanged
+
+### Requirement: The detail view shows the attempt and earlier results
+Once an execution has been restarted, the header SHALL show its attempt number. The run panel SHALL list the run's earlier attempts, newest first, each with its outcome, who set it, and when.
+
+#### Scenario: Attempt badge
+- **WHEN** a project member views an execution at attempt 2
+- **THEN** the header shows "Attempt 2"
+
+#### Scenario: No badge before a restart
+- **WHEN** a project member views an execution at attempt 1
+- **THEN** the header shows no attempt number
+
+#### Scenario: Earlier results in the run panel
+- **WHEN** a project member opens a run whose attempt 1 outcome was Fail
+- **THEN** the run panel lists attempt 1 as Fail with who set it and when
+
+### Requirement: A test case can be added to an existing Draft execution
+"Add to existing execution…" SHALL list the project's Draft executions. Executions that already hold the test case SHALL be shown but not selectable, marked as already including it. Choosing one SHALL add the test case as its last run and take the user to the Executions screen with that execution selected. When there are no Draft executions, the dialog SHALL say so.
+
+#### Scenario: Adding to a Draft
+- **WHEN** a Contributor chooses Run → Add to existing execution… on test case "Login" and picks Draft execution "Smoke"
+- **THEN** "Smoke" gains "Login" as its last run, and the user is on the Executions screen with "Smoke" selected
+
+#### Scenario: An execution that already has the test case
+- **WHEN** the dialog lists Draft execution "Regression", which already has a run for "Login"
+- **THEN** "Regression" is shown as already including it and cannot be chosen
+
+#### Scenario: No Draft executions
+- **WHEN** the project has no Draft executions
+- **THEN** the dialog says there are none and suggests creating a new execution
+
+### Requirement: Contributors remove runs from a Draft execution
+For Contributors and Admins, each run row of a Draft execution SHALL offer a remove control. Removing SHALL take the run out of the table and renumber the rest. When only one run remains, the control SHALL be unavailable and say why. It SHALL NOT be offered outside Draft or to Viewers. A refusal SHALL show the server's reason and keep the runs as they were.
+
+#### Scenario: Removing a run
+- **WHEN** a Contributor removes the second of three runs of a Draft execution
+- **THEN** the table shows the other two runs at positions 1 and 2
+
+#### Scenario: The last run
+- **WHEN** a Contributor views a Draft execution with one run
+- **THEN** that run's remove control is unavailable, saying a Draft needs at least one test case
+
+#### Scenario: Not offered outside Draft
+- **WHEN** a Contributor views a Ready execution
+- **THEN** no run row offers a remove control
+
+### Requirement: The execution detail shows its history
+The execution detail SHALL include a History section listing the execution's history (lifecycle changes, run outcomes, and changes to bugs linked to its runs), newest first, each as a sentence naming who did what and when. It SHALL show 20 entries at a time with "Load more" while older entries exist. It SHALL refresh when the execution changes.
+
+#### Scenario: Reading the history
+- **WHEN** a Viewer opens a Completed execution that Ana started and in which Bo set run 2 to Fail
+- **THEN** the History section lists, newest first, Bo setting run 2 to Fail and Ana starting the execution, each with its time
+
+#### Scenario: Loading more
+- **WHEN** an execution has more than 20 history entries and the user chooses "Load more"
+- **THEN** the next older entries are appended below
+
+#### Scenario: Refreshed by a change
+- **WHEN** the user cancels the execution from the detail view
+- **THEN** the History section shows the cancel entry first without reloading the page

@@ -123,6 +123,55 @@ describe('ExecutionFormDialog', () => {
     );
   });
 
+  describe('duplicating (Try Again, ADR 0020)', () => {
+    const source = makeExecutionWithRuns(
+      [
+        makeRun({ id: 'r1', position: 1, testCaseId: 'tc-a', testCaseName: 'Alpha', testCaseStatus: 'Ready', outcome: 'Fail' }),
+        makeRun({ id: 'r2', position: 2, testCaseId: 'tc-old', testCaseName: 'Obsolete', testCaseStatus: 'Deprecated' }),
+        makeRun({ id: 'r3', position: 3, testCaseId: 'tc-b', testCaseName: 'Beta', testCaseStatus: 'Ready' }),
+        makeRun({ id: 'r4', position: 4, testCaseId: null, testCaseName: 'Gone', testCaseStatus: null, testCaseDeleted: true }),
+      ],
+      { id: 'exec-src', name: 'Smoke', status: 'Done', browser: 'Firefox', locale: 'pt-BR', autoCreateBug: true },
+    );
+
+    it('pre-fills the name, run conditions and eligible test cases, and lists what is not carried over', async () => {
+      renderWithProviders(<ExecutionFormDialog projectId="p1" open onOpenChange={() => {}} source={source} onSaved={() => {}} />);
+      await screen.findByLabelText('Alpha');
+
+      expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Smoke (retry)');
+      expect(selectedNames()).toEqual(['1Alpha', '2Beta']);
+      const note = screen.getByLabelText('Not carried over');
+      expect(within(note).getByText('Obsolete: no longer Ready (Deprecated)')).toBeTruthy();
+      expect(within(note).getByText('Gone: deleted')).toBeTruthy();
+    });
+
+    it('saving creates a new execution with the chosen subset and leaves the source alone', async () => {
+      const created = makeExecutionWithRuns([], { id: 'new-exec' });
+      mockedCreate.mockResolvedValue(created);
+      const onSaved = vi.fn();
+      renderWithProviders(<ExecutionFormDialog projectId="p1" open onOpenChange={() => {}} source={source} onSaved={onSaved} />);
+
+      fireEvent.click(await screen.findByLabelText('Beta'));
+      fireEvent.click(screen.getByRole('button', { name: 'Create execution' }));
+
+      await waitFor(() =>
+        expect(mockedCreate).toHaveBeenCalledWith(
+          expect.anything(),
+          'p1',
+          expect.objectContaining({
+            name: 'Smoke (retry)',
+            testCaseIds: ['tc-a'],
+            browser: 'Firefox',
+            locale: 'pt-BR',
+            autoCreateBug: true,
+          }),
+        ),
+      );
+      expect(mockedUpdate).not.toHaveBeenCalled();
+      expect(onSaved).toHaveBeenCalledWith(created);
+    });
+  });
+
   it('a test case picked up front (Run) is selected and checked', async () => {
     renderWithProviders(
       <ExecutionFormDialog projectId="p1" open onOpenChange={() => {}} initialTestCaseIds={['tc-b']} onSaved={() => {}} />,

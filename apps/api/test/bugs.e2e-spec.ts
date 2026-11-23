@@ -6,6 +6,7 @@ import request from 'supertest';
 import { createTestPrismaClient } from './helpers/prisma-test-client';
 import { createWorkspaceWithProject, type WorkspaceFixture } from './helpers/cross-tenant-harness';
 import { activityCodesFor, insertTestCases, setUpProjectMember } from './helpers/execution-fixtures';
+import { startLiveListener } from './helpers/live-listener';
 import { withTenantContext } from '../src/common/tenant-context';
 
 jest.mock('@clerk/backend', () => ({
@@ -346,6 +347,107 @@ describe('bugs (e2e, specs/bug-tracking)', () => {
       const run2 = await api().get(`${bugs(s)}?testRunId=${s.runIds[1]}`).set(as(s.viewer));
       expect(run1.body).toHaveLength(1);
       expect(run2.body).toHaveLength(1);
+    });
+  });
+
+  describe('attempts (ADR 0020)', () => {
+    const executionBase = (s: Setup) => `/projects/${s.projectId}/executions/${s.executionId}`;
+
+    /** Completes the started execution with both runs Fail, restarts it, and runs it again. */
+    async function toSecondAttempt(s: Setup) {
+      await setOutcome(s, s.runIds[0], 'Fail');
+      await setOutcome(s, s.runIds[1], 'Fail');
+      await api().post(`${executionBase(s)}/restart`).set(as(s.contributor));
+      await api().post(`${executionBase(s)}/run-all`).set(as(s.contributor)).send({ mode: 'Manual' });
+    }
+
+    it('a bug filed from a run records the attempt; one with no run records none', async () => {
+      const s = await setUp('Bug-Attempt');
+      const first = await file(s, s.contributor, { title: 'In attempt 1', severity: 'Low', testRunId: s.runIds[0] });
+      await toSecondAttempt(s);
+
+      const second = await file(s, s.contributor, { title: 'In attempt 2', severity: 'Low', testRunId: s.runIds[0] });
+      const manual = await file(s, s.contributor, { title: 'No run', severity: 'Low' });
+      const firstAfter = await api().get(`${bugs(s)}/${first.body.id}`).set(as(s.viewer));
+
+      expect(second.body.attempt).toBe(2);
+      expect(manual.body.attempt).toBeNull();
+      expect(firstAfter.body).toMatchObject({ attempt: 1, run: { id: s.runIds[0] } });
+    });
+
+    it('linking records the execution’s current attempt', async () => {
+      const s = await setUp('Bug-AttemptLink');
+      await toSecondAttempt(s);
+      const bug = await file(s, s.contributor, { title: 'Link me', severity: 'High' });
+
+      const linked = await api().post(`${bugs(s)}/${bug.body.id}/link-run`).set(as(s.contributor)).send({ testRunId: s.runIds[1] });
+
+      expect(linked.body.attempt).toBe(2);
+    });
+
+    it('failing again after a Restart auto-creates a second bug, one per attempt', async () => {
+      const s = await setUp('Bug-AutoPerAttempt', { autoCreateBug: true });
+      await toSecondAttempt(s);
+
+      await setOutcome(s, s.runIds[0], 'Fail');
+      await setOutcome(s, s.runIds[0], 'Pass');
+      await setOutcome(s, s.runIds[0], 'Fail');
+
+      const list = await api().get(`${bugs(s)}?testRunId=${s.runIds[0]}`).set(as(s.viewer));
+      expect(list.body.map((b: { attempt: number; autoCreated: boolean }) => [b.attempt, b.autoCreated]).sort()).toEqual([
+        [1, true],
+        [2, true],
+      ]);
+    });
+  });
+
+  describe('live events (specs/live-updates)', () => {
+    it('filing from a run, linking, and editing or deleting a linked bug emit run.bugs.changed', async () => {
+      const listener = await startLiveListener();
+      try {
+        const s = await setUp('Bug-Live');
+        const [run1, run2] = s.runIds;
+        const ofProject = async () => (await listener.take()).filter((e) => e.projectId === s.projectId);
+        const changed = (runId: string) => [
+          { type: 'run.bugs.changed', workspaceId: s.workspaceId, projectId: s.projectId, executionId: s.executionId, runId },
+        ];
+        await listener.take();
+
+        const filed = await file(s, s.contributor, { title: 'From run', severity: 'High', testRunId: run1 });
+        expect(filed.status).toBe(201);
+        expect(await ofProject()).toEqual(changed(run1));
+
+        await api().patch(`${bugs(s)}/${filed.body.id}`).set(as(s.contributor)).send({ status: 'InProgress' });
+        expect(await ofProject()).toEqual(changed(run1));
+
+        const loose = await file(s, s.contributor, { title: 'No run yet', severity: 'Low' });
+        expect(await ofProject()).toEqual([]);
+        const linked = await api().post(`${bugs(s)}/${loose.body.id}/link-run`).set(as(s.contributor)).send({ testRunId: run2 });
+        expect(linked.status).toBe(200);
+        expect(await ofProject()).toEqual(changed(run2));
+
+        const deleted = await api().delete(`${bugs(s)}/${filed.body.id}`).set(as(s.admin));
+        expect(deleted.status).toBe(204);
+        expect(await ofProject()).toEqual(changed(run1));
+      } finally {
+        await listener.close();
+      }
+    });
+
+    it('editing a bug with no run emits nothing', async () => {
+      const listener = await startLiveListener();
+      try {
+        const s = await setUp('Bug-LiveUnlinked');
+        const bug = await file(s, s.contributor, { title: 'Unlinked', severity: 'Low' });
+        await listener.take();
+
+        const edited = await api().patch(`${bugs(s)}/${bug.body.id}`).set(as(s.contributor)).send({ title: 'Still unlinked' });
+
+        expect(edited.status).toBe(200);
+        expect((await listener.take()).filter((e) => e.projectId === s.projectId)).toEqual([]);
+      } finally {
+        await listener.close();
+      }
     });
   });
 });

@@ -19,6 +19,8 @@ export interface Bug {
   autoCreated: boolean;
   createdAt: string;
   updatedAt: string;
+  /** The execution attempt it was found in (ADR 0020); null if never tied to a run. */
+  attempt?: number | null;
   run: {
     id: string;
     executionId: string;
@@ -101,4 +103,6 @@ export const bugKeys = {
   list: (projectId: string) => ['projects', projectId, 'bugs', 'list'] as const,
   detail: (projectId: string, bugId: string) => ['projects', projectId, 'bugs', 'detail', bugId] as const,
   forRun: (projectId: string, runId: string) => ['projects', projectId, 'bugs', 'run', runId] as const,
+  /** Prefix of every per-run bug list. */
+  allForRuns: (projectId: string) => ['projects', projectId, 'bugs', 'run'] as const,
 };

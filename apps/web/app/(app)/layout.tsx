@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { cookies } from 'next/headers';
 import { SessionProvider } from '../../lib/session-context';
+import { SessionLiveUpdates } from '../../lib/live-updates';
 import { Shell } from '../../components/shell';
 
 /**
@@ -14,7 +15,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
 
   return (
     <SessionProvider>
-      <Shell defaultOpen={defaultOpen}>{children}</Shell>
+      <SessionLiveUpdates>
+        <Shell defaultOpen={defaultOpen}>{children}</Shell>
+      </SessionLiveUpdates>
     </SessionProvider>
   );
 }

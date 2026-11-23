@@ -6,6 +6,7 @@ import request from 'supertest';
 import { createTestPrismaClient } from './helpers/prisma-test-client';
 import { createWorkspaceWithProjectAndDek as createWorkspaceWithProject } from './helpers/cross-tenant-harness';
 import { insertTestUser, insertWorkspaceMembership, insertProjectMembership } from './helpers/membership-fixtures';
+import { withTenantContext } from '../src/common/tenant-context';
 
 jest.mock('@clerk/backend', () => ({
   verifyToken: jest.fn(async (token: string) => ({ sub: token })),
@@ -323,5 +324,100 @@ describe('environments: CRUD (e2e)', () => {
       .delete(`/projects/${a.projectId}/environments/${environmentIdInA}`)
       .set('Authorization', `Bearer ${adminB}`);
     expect(crossDelete.status).toBe(403);
+  });
+
+  describe('activity logging (ADR 0007, ADR 0021 consequence)', () => {
+    const entries = (workspaceId: string, environmentId: string) =>
+      withTenantContext(prisma, workspaceId, (tx) =>
+        tx.$queryRaw<{ action_code: string; entity_name: string; category: string; details: Record<string, unknown> | null }[]>`
+          SELECT action_code, entity_name, category, details FROM activity_entries
+          WHERE entity_id = ${environmentId}::uuid ORDER BY created_at, id`,
+      );
+
+    it('logs create, edit and delete with aliases and never a password', async () => {
+      const fixture = await createWorkspaceWithProject(prisma, `Env-Log-${randomUUID().slice(0, 8)}`);
+      const adminId = await setUpAdmin(prisma, fixture.workspaceId, fixture.projectId);
+      const base = `/projects/${fixture.projectId}/environments`;
+      const auth = { Authorization: `Bearer ${adminId}` };
+
+      const created = await request(app.getHttpServer())
+        .post(base)
+        .set(auth)
+        .send({
+          name: 'Staging',
+          baseUrl: 'https://staging.example.com',
+          defaultBrowser: 'Chromium',
+          credentials: [
+            { alias: 'admin', email: 'admin@example.com', password: 'first-secret' },
+            { alias: 'buyer', email: 'buyer@example.com', password: 'buyer-secret' },
+          ],
+        });
+      const [adminCredential] = created.body.credentials;
+      await request(app.getHttpServer())
+        .patch(`${base}/${created.body.id}`)
+        .set(auth)
+        .send({
+          baseUrl: 'https://staging2.example.com',
+          credentials: [
+            { id: adminCredential.id, alias: 'admin', email: 'admin@example.com', password: 'second-secret' },
+            { alias: 'guest', email: 'guest@example.com', password: 'guest-secret' },
+          ],
+        });
+      await request(app.getHttpServer()).delete(`${base}/${created.body.id}`).set(auth);
+
+      const log = await entries(fixture.workspaceId, created.body.id);
+      expect(log.map((entry) => [entry.action_code, entry.entity_name, entry.category])).toEqual([
+        ['environment.created', 'Staging', 'Environments'],
+        ['environment.updated', 'Staging', 'Environments'],
+        ['environment.deleted', 'Staging', 'Environments'],
+      ]);
+      expect(log[0].details).toEqual({ credentials: ['admin', 'buyer'] });
+      expect(log[1].details).toEqual({
+        changes: { baseUrl: { from: 'https://staging.example.com', to: 'https://staging2.example.com' } },
+        credentials: { added: ['guest'], changed: ['admin'], removed: ['buyer'] },
+      });
+      const serialized = JSON.stringify(log);
+      for (const secret of ['first-secret', 'buyer-secret', 'second-secret', 'guest-secret']) {
+        expect(serialized).not.toContain(secret);
+      }
+    });
+
+    it('writes nothing for an edit that changes nothing, or one that is rejected', async () => {
+      const fixture = await createWorkspaceWithProject(prisma, `Env-LogNone-${randomUUID().slice(0, 8)}`);
+      const adminId = await setUpAdmin(prisma, fixture.workspaceId, fixture.projectId);
+      const base = `/projects/${fixture.projectId}/environments`;
+      const auth = { Authorization: `Bearer ${adminId}` };
+      const created = await request(app.getHttpServer())
+        .post(base)
+        .set(auth)
+        .send({
+          name: 'Env',
+          baseUrl: 'https://example.com',
+          defaultBrowser: 'Chromium',
+          credentials: [{ alias: 'existing', email: 'a@example.com', password: 'pw' }],
+        });
+      const [existing] = created.body.credentials;
+
+      const unchanged = await request(app.getHttpServer())
+        .patch(`${base}/${created.body.id}`)
+        .set(auth)
+        .send({ name: 'Env', credentials: [{ id: existing.id, alias: 'existing', email: 'a@example.com' }] });
+      const rejected = await request(app.getHttpServer())
+        .patch(`${base}/${created.body.id}`)
+        .set(auth)
+        .send({
+          name: 'Renamed',
+          credentials: [
+            { id: existing.id, alias: 'existing', email: 'a@example.com' },
+            { alias: 'existing', email: 'c@example.com', password: 'pw3' },
+          ],
+        });
+
+      expect(unchanged.status).toBe(200);
+      expect(rejected.status).toBe(400);
+      expect((await entries(fixture.workspaceId, created.body.id)).map((entry) => entry.action_code)).toEqual([
+        'environment.created',
+      ]);
+    });
   });
 });

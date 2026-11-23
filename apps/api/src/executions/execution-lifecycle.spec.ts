@@ -4,6 +4,9 @@ import {
   elapsedMs,
   type ExecutionStatus,
   type LifecycleAction,
+  OUTCOME_EDITABLE_STATUSES,
+  RESTARTABLE_STATUSES,
+  restartMinRole,
   TRANSITIONS,
 } from './execution-lifecycle';
 
@@ -17,16 +20,33 @@ describe('execution lifecycle', () => {
     ['pause', 'InProgress', 'Paused'],
     ['resume', 'Paused', 'InProgress'],
     ['signOff', 'Completed', 'Done'],
+    ['cancel', 'InProgress', 'Canceled'],
+    ['cancel', 'Paused', 'Canceled'],
   ])('%s moves %s to %s', (action, from, to) => {
     expect(canTransition(action, from)).toBe(true);
     expect(TRANSITIONS[action].to).toBe(to);
   });
 
-  it('allows each action from exactly one status', () => {
+  it('allows each action only from its listed statuses', () => {
     for (const action of Object.keys(TRANSITIONS) as LifecycleAction[]) {
       const allowedFrom = ALL_STATUSES.filter((status) => canTransition(action, status));
-      expect(allowedFrom).toEqual([TRANSITIONS[action].from]);
+      expect(allowedFrom).toEqual(TRANSITIONS[action].from);
     }
+  });
+
+  it('cancels only from InProgress or Paused', () => {
+    expect(ALL_STATUSES.filter((status) => canTransition('cancel', status))).toEqual(['InProgress', 'Paused']);
+  });
+
+  it('restarts from Completed, Done or Canceled, and only an Admin restarts Done', () => {
+    expect(RESTARTABLE_STATUSES).toEqual(['Completed', 'Done', 'Canceled']);
+    expect(restartMinRole('Completed')).toBe('Contributor');
+    expect(restartMinRole('Canceled')).toBe('Contributor');
+    expect(restartMinRole('Done')).toBe('Admin');
+  });
+
+  it('never lets outcomes change on a Canceled execution', () => {
+    expect(OUTCOME_EDITABLE_STATUSES).not.toContain('Canceled');
   });
 
   it.each<[LifecycleAction, ExecutionStatus]>([

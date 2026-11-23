@@ -5,6 +5,7 @@ export type RunOutcome = 'Pending' | 'Pass' | 'Fail' | 'NeedsReview';
 export type RecordableOutcome = Exclude<RunOutcome, 'Pending'>;
 export type Browser = 'Chromium' | 'Firefox' | 'WebKit';
 export type RunMode = 'Manual' | 'Automated';
+export type TestCaseStatus = 'Draft' | 'Ready' | 'Deprecated';
 
 export interface Run {
   id: string;
@@ -14,8 +15,21 @@ export interface Run {
   testCaseName: string | null;
   gherkinScript: string | null;
   testCaseDeleted: boolean;
+  /** The test case's status now; null once deleted. Missing = unknown (older fixtures). */
+  testCaseStatus?: TestCaseStatus | null;
   outcome: RunOutcome;
   outcomeUpdatedAt: string | null;
+}
+
+/** One earlier attempt of a run, kept by Restart (ADR 0020). */
+export interface RunAttempt {
+  attempt: number;
+  position: number;
+  outcome: RunOutcome;
+  outcomeUpdatedAt: string | null;
+  outcomeUpdatedByName: string | null;
+  testCaseName: string | null;
+  gherkinScript: string | null;
 }
 
 /** Mirrors the API's ExecutionResponse (apps/api/src/executions/execution-queries.ts). */
@@ -40,6 +54,8 @@ export interface Execution {
   signedOffBy: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Current attempt (ADR 0020): 1 until first restarted. Missing = 1 (older fixtures). */
+  attempt?: number;
   counts: { total: number; done: number; pass: number; fail: number; needsReview: number };
   /** Tags currently carried by the test cases of its runs; missing = none (older fixtures). */
   tagIds?: string[];
@@ -63,7 +79,15 @@ export interface ExecutionInput {
 }
 
 /** The lifecycle verbs, as the API's route segments. */
-export type LifecycleVerb = 'mark-ready' | 'back-to-draft' | 'run-all' | 'pause' | 'resume' | 'sign-off';
+export type LifecycleVerb =
+  | 'mark-ready'
+  | 'back-to-draft'
+  | 'run-all'
+  | 'pause'
+  | 'resume'
+  | 'sign-off'
+  | 'cancel'
+  | 'restart';
 
 const base = (projectId: string) => `/projects/${projectId}/executions`;
 
@@ -132,8 +156,34 @@ export function moveRun(
   });
 }
 
+/** Adds a Ready test case to a Draft execution as its last run (ADR 0021 decision 4). */
+export function addRun(client: ApiClient, projectId: string, executionId: string, testCaseId: string): Promise<Execution> {
+  return client.request(`${base(projectId)}/${executionId}/runs`, { method: 'POST', body: JSON.stringify({ testCaseId }) });
+}
+
+/** Removes one run of a Draft execution; the last run can't be removed (ADR 0021 decision 3). */
+export function removeRun(client: ApiClient, projectId: string, executionId: string, runId: string): Promise<Execution> {
+  return client.request(`${base(projectId)}/${executionId}/runs/${runId}`, { method: 'DELETE' });
+}
+
+/** A run's earlier attempts, newest first. */
+export function listRunAttempts(
+  client: ApiClient,
+  projectId: string,
+  executionId: string,
+  runId: string,
+): Promise<RunAttempt[]> {
+  return client.request(`${base(projectId)}/${executionId}/runs/${runId}/attempts`);
+}
+
+/** The execution's attempt number; 1 when the response predates attempts. */
+export const attemptOf = (execution: Pick<Execution, 'attempt'>): number => execution.attempt ?? 1;
+
 /** Query keys mirror the REST paths (frontend-ui-stack convention). */
 export const executionKeys = {
   list: (projectId: string) => ['projects', projectId, 'executions'] as const,
   detail: (projectId: string, executionId: string) => ['projects', projectId, 'executions', executionId] as const,
+  /** Under the detail key, so refetching an execution (SSE, Restart) refreshes it too. */
+  runAttempts: (projectId: string, executionId: string, runId: string) =>
+    ['projects', projectId, 'executions', executionId, 'runs', runId, 'attempts'] as const,
 };

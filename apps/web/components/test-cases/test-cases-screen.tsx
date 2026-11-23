@@ -18,6 +18,7 @@ import { TreeDialogs, type TreeDialog } from './tree-dialogs';
 import { actionsFor, type TreeAction } from './tree-actions';
 import { PageHeader } from '../page-header';
 import { ExecutionFormDialog } from '../executions/execution-form-dialog';
+import { AddToExecutionDialog } from '../executions/add-to-execution-dialog';
 import { SELECTED_EXECUTION_PARAM } from '../executions/executions-screen';
 
 /** `?testCase=<id>` (bugs link here) or `?folder=<id>` opens with that item selected. */
@@ -43,6 +44,7 @@ export function TestCasesScreen() {
   const [creatingIn, setCreatingIn] = useState<string | null | undefined>(undefined);
   const [dialog, setDialog] = useState<TreeDialog | null>(null);
   const [running, setRunning] = useState<TestCase | null>(null);
+  const [adding, setAdding] = useState<TestCase | null>(null);
 
   const projectId = session.data?.projectId ?? '';
   const ready = !session.loading && !!session.data;
@@ -112,6 +114,7 @@ export function TestCasesScreen() {
                 onUpdated={() => {}}
                 onDeleted={() => setSelected(null)}
                 onRun={permissions.canEdit ? setRunning : undefined}
+                onAddToExisting={permissions.canEdit ? setAdding : undefined}
               />
             </div>
           ) : (
@@ -146,6 +149,15 @@ export function TestCasesScreen() {
           initialTestCaseIds={[running.id]}
           defaultName={running.name}
           onSaved={(execution) => router.push(`/executions?${SELECTED_EXECUTION_PARAM}=${execution.id}`)}
+        />
+      )}
+      {adding && (
+        <AddToExecutionDialog
+          projectId={projectId}
+          testCase={adding}
+          open
+          onOpenChange={(open) => !open && setAdding(null)}
+          onAdded={(execution) => router.push(`/executions?${SELECTED_EXECUTION_PARAM}=${execution.id}`)}
         />
       )}
     </>

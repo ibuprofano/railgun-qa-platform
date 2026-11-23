@@ -11,6 +11,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { ChevronDown } from 'lucide-react';
 import { ActionError } from '../action-error';
 import { GherkinView } from '../gherkin-view';
 import { tagKeys } from '../../lib/tags-api';
@@ -28,6 +30,8 @@ export interface TestCaseDetailProps {
   onDeleted: () => void;
   /** Starts a new execution with this test case; offered only while it is Ready (ADR 0012). */
   onRun?: (testCase: TestCase) => void;
+  /** Run → Add to existing execution (ADR 0021 decision 4). */
+  onAddToExisting?: (testCase: TestCase) => void;
 }
 
 export function TestCaseDetail({
@@ -38,6 +42,7 @@ export function TestCaseDetail({
   onUpdated,
   onDeleted,
   onRun,
+  onAddToExisting,
 }: TestCaseDetailProps) {
   const apiClient = useApiClient();
   const queryClient = useQueryClient();
@@ -143,9 +148,20 @@ export function TestCaseDetail({
         <div className="flex items-center justify-between gap-2">
           <span className="text-sm text-muted-foreground">{testCase.sourceType}</span>
           {onRun && testCase.status === 'Ready' && (
-            <Button type="button" size="sm" onClick={() => onRun(testCase)}>
-              Run
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" size="sm">
+                  Run
+                  <ChevronDown className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => onRun(testCase)}>New execution</DropdownMenuItem>
+                {onAddToExisting && (
+                  <DropdownMenuItem onSelect={() => onAddToExisting(testCase)}>Add to existing execution…</DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
 
