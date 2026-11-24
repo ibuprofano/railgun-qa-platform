@@ -35,7 +35,9 @@ _Aún sin desplegar: la elección de hosting (Postgres, cómputo, almacenamiento
 
 > Puedes tenerlo alojado en público o en privado, en cuyo caso deberás compartir los accesos de manera segura. Puedes enviarlos a [alvaro@lidr.co](mailto:alvaro@lidr.co) usando algún servicio como [onetimesecret](https://onetimesecret.com/). También puedes compartir por correo un archivo zip con el contenido
 
-[github.com/ibuprofano/AI4Devs-finalproject-1](https://github.com/ibuprofano/AI4Devs-finalproject-1), un fork de [LIDR-academy-temp/AI4Devs-finalproject](https://github.com/LIDR-academy-temp/AI4Devs-finalproject). Todo el proyecto vive en la carpeta `finalproject-GR/`, y cada entrega tiene su propia rama; esta es `feature/entrega-2-gr`.
+[github.com/ibuprofano/railgun-qa-platform](https://github.com/ibuprofano/railgun-qa-platform), repositorio público.
+
+Las entregas anteriores se hicieron en la carpeta `finalproject-GR/` de [github.com/ibuprofano/AI4Devs-finalproject-1](https://github.com/ibuprofano/AI4Devs-finalproject-1), un fork de [LIDR-academy-temp/AI4Devs-finalproject](https://github.com/LIDR-academy-temp/AI4Devs-finalproject), con una rama por entrega. Para la entrega final, el proyecto pasó a ser la raíz de su propio repositorio, que conserva el historial de esas entregas.
 
 ---
 
@@ -63,17 +65,35 @@ Está dirigido a equipos de QA (manuales y de automatización), líderes técnic
 - **Auditoría**: registro de actividad inmutable por proyecto, filtrable por tipo de entidad.
 - **Roadmap de IA**: generación de casos de prueba desde fuentes externas, generación de código Playwright a partir de casos automatizados de alta confianza, y configuración de proveedor/modelo de IA por proyecto.
 
-**Estado de la implementación (entrega 2):** el MVP ([docs/roadmap-mvp.md](docs/roadmap-mvp.md), fases 0–9) está completo, y del roadmap completo ([docs/roadmap-full.md](docs/roadmap-full.md)) ya se han construido varios tramos.
+**Estado de la implementación (entrega final):** el proyecto sigue en desarrollo. El MVP ([docs/roadmap-mvp.md](docs/roadmap-mvp.md), fases 0–9) está completo, y del roadmap completo ([docs/roadmap-full.md](docs/roadmap-full.md)) ya se han construido varios tramos.
 
 Ya funciona:
 - **Base multi-tenant:** aislamiento por tenant con RLS, alta de identidad al primer login, autorización por rol de proyecto, log de actividad en la misma transacción y credenciales de entorno cifradas con revelado auditado.
 - **Casos de prueba:** árbol de carpetas de 4 niveles con drag-and-drop, edición en Gherkin y etiquetas.
-- **Ejecuciones y bugs:** ciclo de vida de ejecuciones con runs manuales, temporizador con pausas y firma (sign-off); bugs con creación automática al fallar un run; filtros por etiqueta.
+- **Ejecuciones y bugs:**
+  - ciclo de vida de ejecuciones con runs manuales, temporizador con pausas y firma (sign-off)
+  - bugs con creación automática al fallar un run, y filtros por etiqueta
+- **Cancelar y Try Again** ([ADR 0019](docs/adr/0019-execution-cancel.md) y [ADR 0020](docs/adr/0020-execution-try-again.md)):
+  - Cancelar una ejecución en curso o en pausa.
+  - Restart: vuelve a ejecutar la misma ejecución, conservando los resultados anteriores como historial de intentos.
+  - Duplicate: crea una ejecución nueva en Draft con un subconjunto de los casos de prueba.
+  - Cada bug guarda el intento en que se encontró.
+- **Historial y runs en Draft** ([ADR 0021](docs/adr/0021-execution-history-and-draft-run-changes.md)):
+  - un panel de historial en cada ejecución y en cada bug
+  - quitar runs de una ejecución en Draft, y añadir un caso de prueba a una ejecución en Draft existente
+  - los cambios de entornos quedan registrados en el log de actividad
+- **Tiempo real:** las pantallas de ejecuciones se actualizan en vivo por *server-sent events*, y solo refrescan por sondeo si el stream no está disponible.
 - **Proyectos y workspace:** proyectos con selector, papelera y restauración, y renombrado del workspace.
 - **Jobs en segundo plano:** el worker de jobs (Graphile Worker) con la purga diaria de la papelera.
 - **Datos de demostración:** un seed con un proyecto de ejemplo completo.
 
-Pendiente: tiempo real por SSE (propuesto como el cambio `sse-live-updates`), invitaciones y miembros, adjuntos de imagen, dashboards, reportes, y el motor automatizado.
+Pendiente:
+- invitaciones y miembros (y el email que las envía)
+- adjuntos de imagen
+- la pantalla de Actividad y los dashboards
+- reportes PDF/HTML
+- el grafo de trazabilidad
+- el motor automatizado
 
 ### **1.3. Diseño y experiencia de usuario:**
 
@@ -87,7 +107,7 @@ _Pendiente: capturas de pantalla y video walkthrough de los flujos principales (
 
 > Documenta de manera precisa las instrucciones para instalar y poner en marcha el proyecto en local (librerías, backend, frontend, servidor, base de datos, migraciones y semillas de datos, etc.)
 
-Todos los comandos se ejecutan desde la carpeta `finalproject-GR/`. [CLAUDE.md](CLAUDE.md) amplía cada variable de entorno y cada comando.
+Todos los comandos se ejecutan desde la raíz del repositorio. [CLAUDE.md](CLAUDE.md) amplía cada variable de entorno y cada comando.
 
 **Requisitos previos:**
 - **Node.js ≥ 22.18** y **npm**. El monorepo usa npm workspaces ([ADR 0010](docs/adr/0010-monorepo-layout.md)), y Graphile Worker exige Node 22.18.
@@ -98,8 +118,8 @@ Todos los comandos se ejecutan desde la carpeta `finalproject-GR/`. [CLAUDE.md](
 **Pasos:**
 1. **Clonar e instalar:**
    ```bash
-   git clone -b feature/entrega-2-gr https://github.com/ibuprofano/AI4Devs-finalproject-1.git
-   cd AI4Devs-finalproject-1/finalproject-GR
+   git clone https://github.com/ibuprofano/railgun-qa-platform.git
+   cd railgun-qa-platform
    npm install
    ```
 2. **Levantar PostgreSQL:** `docker compose up -d`. Escucha en el puerto **5433** del host. En un volumen nuevo, `db/init/` crea los roles:
@@ -114,7 +134,7 @@ Todos los comandos se ejecutan desde la carpeta `finalproject-GR/`. [CLAUDE.md](
    DATABASE_URL=postgresql://railgun_migrator:migrator_dev_password@localhost:5433/railgun npm run db:migrate
    DATABASE_URL=postgresql://postgres:postgres@localhost:5433/railgun npm run db:check-rls
    ```
-   El primer comando instala el esquema de Graphile Worker y aplica `db/migrations/0001`–`0014`. El segundo comprueba que toda tabla con `workspace_id` tenga política RLS.
+   El primer comando instala el esquema de Graphile Worker y aplica `db/migrations/0001`–`0015`. El segundo comprueba que toda tabla con `workspace_id` tenga política RLS.
 4. **Configurar las variables de entorno:**
    - **API:** copia `apps/api/.env.example` a `apps/api/.env` y rellena:
      - `CLERK_SECRET_KEY`
@@ -198,8 +218,8 @@ flowchart TB
 - Las líneas continuas forman parte de v1; las discontinuas corresponden al motor de ejecución automatizada (deshabilitado en el PRD, §9) y a la clave maestra en KMS, que se adopta cuando se cumpla el disparador del ADR 0004.
 - **No hay Redis ni WebSockets en v1**: las notificaciones en tiempo real son *server-sent events* (una sola dirección, servidor → navegador) y la cola de jobs vive en PostgreSQL, con lo que un job se encola en la misma transacción que el cambio que lo origina. Redis (pub/sub) y la evaluación de Temporal vuelven cuando se retome el motor de automatización (ADR 0005).
 - Clerk solo gestiona **identidad**. Workspaces, membresías, roles e invitaciones viven en nuestra base de datos (ADR 0002).
-- El navegador llama a la API directamente y envía el token de sesión de Clerk como `Authorization: Bearer`. El stream SSE usará el mismo token mediante un cliente basado en `fetch` ([ADR 0009](docs/adr/0009-api-authentication-transport.md)).
-- **Estado actual:** la web, la API, el worker y PostgreSQL ya existen y funcionan en local. Todavía no existen el almacenamiento de objetos, el email, KMS, el motor Playwright ni el hosting. Mientras no llega el tiempo real por SSE, la web refresca las ejecuciones en curso cada 5 s.
+- El navegador llama a la API directamente y envía el token de sesión de Clerk como `Authorization: Bearer`. El stream SSE usa el mismo token, mediante un cliente basado en `fetch` ([ADR 0009](docs/adr/0009-api-authentication-transport.md)).
+- **Estado actual:** la web, la API, el worker y PostgreSQL ya existen y funcionan en local. Todavía no existen el almacenamiento de objetos, el email, KMS, el motor Playwright ni el hosting. El tiempo real por SSE ya funciona: un stream por proyecto, alimentado por `LISTEN/NOTIFY` de PostgreSQL.
 
 **Patrón y justificación:** el backend sigue un patrón de **monolito modular** (NestJS, organizado por dominio: workspaces, proyectos, casos de prueba, ejecuciones, bugs, actividad) con un **worker desacoplado** que consume una cola en PostgreSQL para el trabajo asíncrono (emails, reportes, jobs programados). El frontend (Next.js) es un cliente independiente que consume la API por REST y SSE.
 
@@ -238,14 +258,16 @@ No se optó por microservicios: dado el estado inicial del producto y el tamaño
 
 > Representa la estructura del proyecto y explica brevemente el propósito de las carpetas principales, así como si obedece a algún patrón o arquitectura específica.
 
-Monorepo con **npm workspaces** ([ADR 0010](docs/adr/0010-monorepo-layout.md)): `apps/` agrupa los procesos desplegables y `packages/` el código compartido no desplegable. Esta es la estructura real tras la entrega 2:
+Monorepo con **npm workspaces** ([ADR 0010](docs/adr/0010-monorepo-layout.md)): `apps/` agrupa los procesos desplegables y `packages/` el código compartido no desplegable. Esta es la estructura real a la fecha de la entrega final:
 
 ```
-finalproject-GR/
+railgun-qa-platform/
+├── .github/workflows/        # CI: lint, typecheck, migraciones y chequeo de RLS
+├── .claude/                  # Comandos /opsx:* de OpenSpec para Claude Code
 ├── apps/
 │   ├── api/                  # NestJS — API REST
 │   │   ├── src/common/       # Guards (Clerk, rol de proyecto, owner), withTenantContext, ActivityLogger, cifrado de secretos
-│   │   ├── src/<dominio>/    # Un módulo por dominio: projects, folders, test-cases, tags, executions, bugs, environments, workspace, me
+│   │   ├── src/<dominio>/    # Un módulo por dominio: projects, folders, test-cases, tags, executions, bugs, environments, workspace, me, realtime
 │   │   ├── scripts/seed.ts   # Seed de demostración (ShopFlow)
 │   │   └── test/             # Tests e2e contra Postgres real, incluido el arnés de aislamiento entre tenants
 │   ├── web/                  # Next.js (App Router)
@@ -259,17 +281,18 @@ finalproject-GR/
 │   └── reporting/            # Reservado para gráficos y reportes (vacío por ahora)
 ├── db/
 │   ├── init/                 # Roles de base de datos (superusuario, una vez)
-│   └── migrations/           # 0001–0014, cada una con .up.sql y .down.sql
+│   └── migrations/           # 0001–0015, cada una con .up.sql y .down.sql
 ├── prisma/schema.prisma      # Solo datasource y generator; el esquema vive en db/migrations
 ├── scripts/                  # Migraciones, instalación de la cola, chequeo de RLS, `npm run dev`
 ├── openspec/
-│   ├── specs/                # Especificaciones vigentes por capacidad (25)
+│   ├── specs/                # Especificaciones vigentes por capacidad (26)
 │   └── changes/              # Cambios en curso y archivo de cambios completados
 ├── docs/
-│   ├── adr/                  # ADR 0001–0018
+│   ├── adr/                  # ADR 0001–0021
 │   ├── open-questions.md     # Decisiones aún abiertas
 │   ├── roadmap-mvp.md        # Orden de construcción del MVP (completado)
 │   └── roadmap-full.md       # Orden de construcción del producto completo
+├── README.md                 # Presentación breve del repositorio
 ├── CLAUDE.md                 # Guía para el asistente de código
 ├── PRD.md                    # Documento de producto
 └── docker-compose.yml        # PostgreSQL 16 local
@@ -291,7 +314,7 @@ La infraestructura reutiliza el diagrama de la sección 2.1: **Vercel** aloja el
 3. El proveedor de contenedores reconstruye y despliega la API y el worker a partir de la misma rama. Las migraciones se ejecutan con un **rol privilegiado propio del pipeline**; la API y el worker corren siempre con un rol sin capacidad de saltarse RLS ni de modificar el log de actividad (ADR 0003 y 0007).
 4. Variables de entorno y secretos (claves de Clerk, credenciales S3/R2 y del proveedor de email, cadenas de conexión a base de datos y la clave maestra de cifrado) se gestionan en cada plataforma, nunca en el repositorio. La clave maestra no se guarda junto a las copias de seguridad de la base de datos (ADR 0004).
 
-**Integración continua (ya en marcha):** GitHub Actions ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml), en la raíz del repositorio) se ejecuta en cada push o PR que toque `finalproject-GR/`. El workflow sigue estos pasos:
+**Integración continua (ya en marcha):** GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) se ejecuta en cada push y en cada PR. El workflow sigue estos pasos:
 1. Levanta un servicio PostgreSQL 16 y usa Node 22.
 2. Instala dependencias, y ejecuta `npm run lint` y `npm run typecheck` en todos los workspaces.
 3. Crea los roles de base de datos (`db/init`).
@@ -318,13 +341,17 @@ _El despliegue continuo, los entornos de staging y la observabilidad (logs, erro
 - **Reportes seguros por construcción**: el HTML escapa todo texto de usuario, la biblioteca PDF no interpreta marcado, y ambos se construyen desde un objeto de datos con lista blanca de campos que no incluye secretos ni elementos de la papelera ([ADR 0006](docs/adr/0006-report-generation.md)).
 - **HTTPS end-to-end** entre cliente, frontend y API, tanto en tráfico REST como en los streams SSE.
 
-**Implementado a la fecha de la entrega 2:**
+**Implementado a la fecha de la entrega final:**
 - **RBAC:** guards de rol de proyecto y de Owner de workspace.
 - **Aislamiento entre tenants:** RLS forzada en todas las tablas de tenant, con roles separados para la API, el worker y las migraciones.
 - **Autenticación:** verificación del JWT de Clerk en cada petición.
 - **Secretos:** cifrado de sobre con revelado auditado y limitado en frecuencia.
 - **Log de actividad:** inmutable.
 - **Papelera:** purga a los 30 días.
+- **Streams SSE:**
+  - El token y el rol se comprueban al abrir el stream, y el workspace en cada evento.
+  - El stream se cierra a los 5 minutos para volver a validar el acceso.
+  - Los eventos solo llevan identificadores, nunca datos.
 
 **Pendiente, ligado a funciones aún no construidas:**
 - invitaciones
@@ -338,17 +365,21 @@ _El despliegue continuo, los entornos de staging y la observabilidad (logs, erro
 
 > Describe brevemente algunos de los tests realizados
 
-Cada cambio de OpenSpec incluye sus propios tests en sus tareas, y una tarea solo se marca como hecha cuando su verificación pasa. A la fecha de la entrega 2 hay unos 90 ficheros de test:
+Cada cambio de OpenSpec incluye sus propios tests en sus tareas, y una tarea solo se marca como hecha cuando su verificación pasa. A la fecha de la entrega final hay unos 100 ficheros de test:
 
-- **API: 41 ficheros, Jest + Supertest.** Se dividen en tests unitarios de reglas de dominio y tests e2e que levantan el `AppModule` real contra el PostgreSQL de docker-compose. Solo se simula la verificación del token de Clerk.
+- **API: 47 ficheros, Jest + Supertest.** Se dividen en tests unitarios de reglas de dominio y tests e2e que levantan el `AppModule` real contra el PostgreSQL de docker-compose. Solo se simula la verificación del token de Clerk.
   - **Unitarios:** la máquina de estados de ejecuciones, las reglas de bugs y de proyectos, el orden fraccionario, el cifrado y los guards.
   - **Aislamiento entre tenants** (`tenant-isolation.e2e-spec.ts` y un arnés reutilizable): para cada tabla de tenant, las lecturas en el contexto del workspace A no ven datos del workspace B, una escritura cruzada se rechaza, y sin contexto de tenant se obtienen cero filas.
   - **Integridad:** el log de actividad sobrevive al borrado de entidades. Los secretos se guardan solo cifrados, y cada revelado escribe su entrada de auditoría en la misma transacción.
   - **Ciclo de vida:** las transiciones válidas e inválidas (`409`), los permisos por rol, el temporizador con pausas, los snapshots al iniciar, el cierre automático y el sign-off.
+  - **Cancel y Restart:** el historial de intentos, los runs descartados y un bug automático por intento.
+  - **Historial:** la paginación del historial y su alcance (la ejecución, sus runs y sus bugs).
+  - **Tiempo real:** un evento por cambio confirmado, y ninguno si la transacción se revierte.
 - **Worker: 5 ficheros, Jest.** Cubren el contexto de tenant, el crontab, el cierre ordenado, el encolado transaccional por la lista blanca (`enqueue_job`) y la purga de la papelera: plazo de 30 días, orden de dependencias, entrada de actividad del sistema e idempotencia.
-- **Web: 43 ficheros, Vitest + React Testing Library.** Cubren:
+- **Web: 49 ficheros, Vitest + React Testing Library.** Cubren:
   - el árbol de carpetas con drag-and-drop
-  - el detalle de ejecución (temporizador, sondeo y acciones por rol)
+  - el detalle de ejecución: temporizador, acciones por rol, Cancel y Try Again, historial
+  - el cliente SSE y su reconexión
   - los modales de alta
   - los filtros por etiqueta
   - la protección de rutas
@@ -370,15 +401,15 @@ Pendiente:
 
 Este modelo refleja el [PRD v1.1](PRD.md) y los ADR [0002](docs/adr/0002-authentication-and-workspace-membership.md) (identidad y membresías), [0003](docs/adr/0003-tenant-isolation.md) (aislamiento por tenant), [0004](docs/adr/0004-secrets-storage.md) (secretos), [0006](docs/adr/0006-report-generation.md) (reportes) y [0007](docs/adr/0007-activity-log-and-trash-purge.md) (log de actividad y papelera). Toda tabla de tenant lleva `workspace_id` y las de papelera llevan `deleted_by`: ambas son claves foráneas (a `WORKSPACE` y a `USER`) que **no se dibujan como líneas** para no saturar el diagrama, pero sí figuran en cada entidad. `ACTIVITY_ENTRY` no tiene relaciones a propósito: no usa claves foráneas.
 
-> **Estado de la implementación (entrega 2):** el diagrama describe el modelo objetivo del producto completo. Las migraciones `0001`–`0014` ya crean:
+> **Estado de la implementación (entrega final):** el diagrama describe el modelo objetivo del producto completo. Las migraciones `0001`–`0015` ya crean:
 > - `workspace`, `user`, `workspace_membership`, `workspace_dek` (la `WORKSPACE_KEY` del diagrama) y `project`, con `user.last_project_id` para el proyecto activo ([ADR 0017](docs/adr/0017-active-project.md))
 > - `project_membership`, `folder`, `test_case`, `tag`, `test_case_tag` y `bug_tag`
-> - `environment`, `environment_credential`, `test_execution`, `test_run` y `bug`
+> - `environment`, `environment_credential`, `test_execution`, `test_run`, `test_run_attempt` y `bug`
 > - `activity_entries`
 >
 > Difieren del diagrama en tres puntos:
 > - El árbol de carpetas admite **4** niveles (enmienda del PRD §2.3).
-> - Un run guarda solo su resultado (`outcome`) y sus snapshots. Todavía no hay `TestRunAttempt` ni `TestRunStep`, y el paso fallido se guarda en el bug (`failed_step_snapshot`).
+> - Un run guarda su resultado (`outcome`) y sus snapshots. Los intentos anteriores se guardan en `test_run_attempt` al hacer Restart ([ADR 0020](docs/adr/0020-execution-try-again.md)). Todavía no hay `TestRunStep`, y el paso fallido se guarda en el bug (`failed_step_snapshot`).
 > - El orden de carpetas y casos usa claves fraccionarias. Los runs usan una posición entera que se renumera al reordenar ([ADR 0014](docs/adr/0014-drag-and-drop-and-ordering.md)).
 >
 > Aún no existen `INVITATION`, `PROJECT_SETTINGS`, `BUG_IMAGE`, `HEALTH_SCORE_SNAPSHOT` ni `REPORT`.
@@ -796,9 +827,9 @@ erDiagram
 - **Efectos comunes de toda escritura:** se registra una entrada en el log de actividad **en la misma transacción** y se emite un evento SSE a los suscriptores afectados.
 - **Identificadores** UUID v7; `positionKey` es una clave de orden fraccionaria opaca (ver sección 3).
 
-> **Estado de la implementación (entrega 2):** los tres endpoints existen. Difieren de esta especificación inicial en tres puntos:
+> **Estado de la implementación (entrega final):** los tres endpoints existen. Difieren de esta especificación inicial en tres puntos:
 > - **Rutas anidadas bajo el proyecto:** son `POST /projects/{projectId}/executions/{executionId}/run-all` y `POST /projects/{projectId}/bugs`, sin rutas por id suelto.
-> - **Eventos SSE:** las escrituras todavía no emiten eventos; llegan con el cambio `sse-live-updates`, y mientras tanto la web refresca por sondeo.
+> - **Eventos SSE:** las escrituras emiten `execution.changed` o `run.bugs.changed` con `pg_notify`, dentro de la misma transacción. Llegan por un único stream por proyecto (`GET /projects/{projectId}/events`), no por ejecución ([`live-updates`](openspec/specs/live-updates/spec.md)).
 > - **Modo Automated:** `run-all` solo acepta el modo `Manual` y rechaza `Automated` como no disponible (PRD §9).
 >
 > Las especificaciones vigentes, con todos sus escenarios, están en [`openspec/specs/`](openspec/specs/).
@@ -1121,11 +1152,10 @@ Los tres tickets forman un **corte vertical del ciclo de vida de una ejecución*
 
 **Definición de hecho común a los tres tickets:** el código pasa revisión; los tests indicados pasan en CI; no hay secretos ni datos personales en logs; y si cambia un contrato de la API, se actualiza la sección 4 de este documento.
 
-> **Estado de la implementación (entrega 2):** los tickets se implementaron como cambios de OpenSpec.
+> **Estado de la implementación (entrega final):** los tickets se implementaron como cambios de OpenSpec.
 > - **Tickets 1 y 2:** [`execution-lifecycle`](openspec/changes/archive/2026-10-25-execution-lifecycle/proposal.md).
 > - **Ticket 3:** [`executions-screen`](openspec/changes/archive/2026-10-25-executions-screen/proposal.md).
->
-> Queda pendiente la parte de tiempo real: la suscripción SSE del Ticket 3 y el ticket previo RG-S. El cambio [`sse-live-updates`](openspec/changes/sse-live-updates/proposal.md) ya está propuesto. Hasta entonces, la pantalla refresca por sondeo cada 5 s.
+> - **Tiempo real** (la suscripción SSE del Ticket 3 y el ticket previo RG-S): [`sse-live-updates`](openspec/changes/archive/2026-11-10-sse-live-updates/proposal.md). Usa un único stream por proyecto, y el sondeo cada 5 s queda solo como respaldo cuando el stream no está disponible.
 
 ---
 
