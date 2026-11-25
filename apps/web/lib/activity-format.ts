@@ -68,6 +68,15 @@ function lifecycle(verb: string): Describe {
   return (entry) => `${verb} execution ${quote(entry.entityName)}`;
 }
 
+/** "restored folder “Checkout”", plus " with test case “Pay”" when it came back with another item (ADR 0022). */
+function restored(noun: string): Describe {
+  return (entry, d) => {
+    const with_ = d.restoredWith as { type?: string; name?: string } | undefined;
+    const reason = with_?.name ? ` with ${(with_.type ?? 'item').replace('-', ' ')} ${quote(with_.name)}` : '';
+    return `restored ${noun} ${quote(entry.entityName)}${reason}`;
+  };
+}
+
 export const DESCRIPTIONS: Record<string, Describe> = {
   'test_execution.created': lifecycle('created'),
   'test_execution.updated': (entry, d) =>
@@ -75,6 +84,7 @@ export const DESCRIPTIONS: Record<string, Describe> = {
       ? `edited execution ${quote(entry.entityName)} (${fieldList(d.fields as string[])})`
       : `edited execution ${quote(entry.entityName)}`,
   'test_execution.deleted': lifecycle('deleted'),
+  'test_execution.restored': restored('execution'),
   'test_execution.purged': (entry) => `permanently removed execution ${quote(entry.entityName)} from the trash`,
   'test_execution.marked_ready': lifecycle('marked as Ready'),
   'test_execution.returned_to_draft': (entry) => `moved execution ${quote(entry.entityName)} back to Draft`,
@@ -102,16 +112,21 @@ export const DESCRIPTIONS: Record<string, Describe> = {
   'bug.updated': bugUpdated,
   'bug.linked': (entry) => `linked bug ${quote(entry.entityName)} to a run`,
   'bug.deleted': (entry) => `deleted bug ${quote(entry.entityName)}`,
+  'bug.restored': restored('bug'),
   'bug.purged': (entry) => `permanently removed bug ${quote(entry.entityName)} from the trash`,
   'test_case.created': (entry) => `created test case ${quote(entry.entityName)}`,
   'test_case.updated': testCaseUpdated,
   'test_case.moved': (entry) => `moved test case ${quote(entry.entityName)}`,
   'test_case.deleted': (entry) => `deleted test case ${quote(entry.entityName)}`,
+  // PRD §8: downloading a report is recorded (report-pipeline). The name reads "Bugs dashboard report".
+  'report.downloaded': (entry) => `downloaded the ${entry.entityName}`,
+  'test_case.restored': restored('test case'),
   'test_case.purged': (entry) => `permanently removed test case ${quote(entry.entityName)} from the trash`,
   'folder.created': (entry) => `created folder ${quote(entry.entityName)}`,
   'folder.renamed': (entry, d) => (d.from ? `renamed folder ${quote(String(d.from))} to ${quote(entry.entityName)}` : `renamed folder ${quote(entry.entityName)}`),
   'folder.moved': (entry) => `moved folder ${quote(entry.entityName)}`,
   'folder.deleted': (entry) => `deleted folder ${quote(entry.entityName)}`,
+  'folder.restored': restored('folder'),
   'folder.purged': (entry) => `permanently removed folder ${quote(entry.entityName)} from the trash`,
   'tag.created': (entry) => `created tag ${quote(entry.entityName)}`,
   'tag.updated': (entry) => `updated tag ${quote(entry.entityName)}`,
@@ -149,4 +164,64 @@ export function relativeTime(iso: string, now: Date = new Date()): string {
   const days = Math.round(hours / 24);
   if (days < 7) return `${days} day${days === 1 ? '' : 's'} ago`;
   return new Date(iso).toLocaleDateString();
+}
+
+/** How the Activity screen colours an entry: things appearing, things going away, or anything else. */
+export type ActionKind = 'create' | 'remove' | 'change';
+
+const CREATE_VERBS = new Set(['created', 'restored', 'run_added']);
+const REMOVE_VERBS = new Set(['deleted', 'purged', 'run_removed']);
+
+export function actionKind(entry: Pick<ActivityEntry, 'actionCode'>): ActionKind {
+  const verb = entry.actionCode.slice(entry.actionCode.lastIndexOf('.') + 1);
+  if (CREATE_VERBS.has(verb)) return 'create';
+  if (REMOVE_VERBS.has(verb)) return 'remove';
+  return 'change';
+}
+
+/** Two letters for the avatar: first and last word ("Ana Ruiz" → "AR"), or a single word's first two ("Ana" → "AN"). */
+export function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  const letters = parts.length > 1 ? parts[0][0] + parts[parts.length - 1][0] : parts[0].slice(0, 2);
+  return letters.toUpperCase();
+}
+
+export interface DayGroup {
+  /** "Today", "Yesterday", a weekday name for earlier days this week, else the date. */
+  label: string;
+  entries: ActivityEntry[];
+}
+
+const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+const DAY_MS = 86_400_000;
+
+/** Label for a calendar day relative to `now`, in local time; weeks start on Monday. */
+export function dayLabel(day: Date, now: Date): string {
+  const today = startOfDay(now);
+  const target = startOfDay(day);
+  // Round, since a DST change makes one day 23 or 25 hours long.
+  const daysAgo = Math.round((today.getTime() - target.getTime()) / DAY_MS);
+  if (daysAgo === 0) return 'Today';
+  if (daysAgo === 1) return 'Yesterday';
+  const daysSinceMonday = (today.getDay() + 6) % 7;
+  if (daysAgo > 1 && daysAgo <= daysSinceMonday) {
+    return target.toLocaleDateString(undefined, { weekday: 'long' });
+  }
+  return target.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+/** Groups entries (already newest first) under day headings, keeping their order. */
+export function groupByDay(entries: ActivityEntry[], now: Date = new Date()): DayGroup[] {
+  const groups: DayGroup[] = [];
+  for (const entry of entries) {
+    const label = dayLabel(new Date(entry.createdAt), now);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) {
+      last.entries.push(entry);
+    } else {
+      groups.push({ label, entries: [entry] });
+    }
+  }
+  return groups;
 }

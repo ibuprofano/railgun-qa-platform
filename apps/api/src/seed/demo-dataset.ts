@@ -31,8 +31,21 @@ export interface DemoTestCase {
   name: string;
   folderKey: string;
   status: TestCaseStatus;
+  /** The current script. */
   gherkin: string;
   createdDaysAgo: number;
+  /**
+   * A script edit after creation (test-cases-dashboard design.md decision 6): runs started
+   * before it snapshot `previousGherkin`, later ones `gherkin`.
+   */
+  scriptEdit?: DemoScriptEdit;
+}
+
+export interface DemoScriptEdit {
+  daysAgo: number;
+  by: Actor;
+  /** The script before the edit. */
+  previousGherkin: string;
 }
 
 export interface DemoCredential {
@@ -102,6 +115,18 @@ export interface DemoBug {
   createdDaysAgo: number;
   /** A later status change, logged as bug.updated. */
   statusChange?: { from: BugStatus; daysAgo: number; by: Actor };
+  /** Tags it was filed with (keys of TAGS). */
+  tagKeys?: string[];
+}
+
+export type TagColor = 'gray' | 'red' | 'orange' | 'amber' | 'green' | 'teal' | 'blue' | 'violet';
+
+/** A project tag (ADR 0016), created by the owner before any bug carrying it. */
+export interface DemoTag {
+  key: string;
+  name: string;
+  color: TagColor;
+  createdDaysAgo: number;
 }
 
 export const MARKER_FOLDER_KEY = 'shopflow';
@@ -138,6 +163,16 @@ const tc = (
   steps: string[],
   createdDaysAgo = 20,
 ): DemoTestCase => ({ key, name, folderKey, status, gherkin: gherkin(feature, name, steps), createdDaysAgo });
+
+/** A test case whose script was edited after it last ran, so its detail shows Trend Reset. */
+const edited = (
+  testCase: DemoTestCase,
+  feature: string,
+  edit: { daysAgo: number; by: Actor; previousSteps: string[] },
+): DemoTestCase => ({
+  ...testCase,
+  scriptEdit: { daysAgo: edit.daysAgo, by: edit.by, previousGherkin: gherkin(feature, testCase.name, edit.previousSteps) },
+});
 
 export const TEST_CASES: DemoTestCase[] = [
   tc('smoke-home', 'Home page loads with featured products', MARKER_FOLDER_KEY, 'Ready', 'Storefront', [
@@ -280,23 +315,46 @@ export const TEST_CASES: DemoTestCase[] = [
     'Then my order is confirmed',
     'And I receive an order confirmation email',
   ]),
-  tc('card-3ds', 'Pay with a card requiring 3-D Secure', 'cards', 'Ready', 'Card payments', [
-    'Given I am at the payment step',
-    'When I pay with the test card "4000 0027 6000 3184"',
-    'And I approve the 3-D Secure challenge',
-    'Then my order is confirmed',
-  ]),
+  edited(
+    tc('card-3ds', 'Pay with a card requiring 3-D Secure', 'cards', 'Ready', 'Card payments', [
+      'Given I am at the payment step',
+      'When I pay with the test card "4000 0027 6000 3184"',
+      'And I approve the 3-D Secure challenge',
+      'Then my order is confirmed',
+    ]),
+    'Card payments',
+    {
+      // The old test card stopped triggering the challenge after the gateway upgrade.
+      daysAgo: 6,
+      by: 'contributor',
+      previousSteps: [
+        'Given I am at the payment step',
+        'When I pay with the test card "4000 0000 0000 3220"',
+        'And I approve the 3-D Secure challenge',
+        'Then my order is confirmed',
+      ],
+    },
+  ),
   tc('card-saved', 'Pay with a saved card', 'cards', 'Draft', 'Card payments', [
     'Given I have a saved Visa card',
     'When I pay with the saved card',
     'Then my order is confirmed without re-entering the card',
   ], 5),
-  tc('wallet-paypal', 'Pay with PayPal', 'wallets', 'Ready', 'Wallet payments', [
-    'Given I am at the payment step',
-    'When I choose PayPal and approve the payment',
-    'Then I return to ShopFlow',
-    'And my order is confirmed',
-  ]),
+  edited(
+    tc('wallet-paypal', 'Pay with PayPal', 'wallets', 'Ready', 'Wallet payments', [
+      'Given I am at the payment step',
+      'When I choose PayPal and approve the payment',
+      'Then I return to ShopFlow',
+      'And my order is confirmed',
+    ]),
+    'Wallet payments',
+    {
+      // Added the return step after the Needs Review run.
+      daysAgo: 6,
+      by: 'owner',
+      previousSteps: ['Given I am at the payment step', 'When I choose PayPal and approve the payment', 'Then my order is confirmed'],
+    },
+  ),
   tc('wallet-apple', 'Pay with Apple Pay', 'wallets', 'Draft', 'Wallet payments', [
     'Given I use Safari on a device with Apple Pay',
     'When I choose Apple Pay',
@@ -378,6 +436,58 @@ export const EXECUTIONS: DemoExecution[] = [
       { testCaseKey: 'guest-checkout', outcome: 'Fail' },
       { testCaseKey: 'card-visa', outcome: 'Pass' },
       { testCaseKey: 'order-history', outcome: 'Pass', by: 'owner' },
+    ],
+  },
+  // Two smaller signed-off reruns, so the sign-in and search test cases reach the 3
+  // completed runs Top Failing needs (test-cases-dashboard design.md decision 7).
+  {
+    key: 'auth-regression',
+    name: 'Auth regression',
+    description: 'Rerun of the sign-in and password reset checks after the session fix.',
+    status: 'Done',
+    environmentKey: 'staging',
+    browser: 'Chromium',
+    viewport: [1366, 768],
+    locale: 'en-US',
+    timezone: 'UTC',
+    autoCreateBug: false,
+    createdBy: 'contributor',
+    createdDaysAgo: 14,
+    readyDaysAgo: 13.6,
+    startedDaysAgo: 13,
+    completedDaysAgo: 12.9,
+    signedOffDaysAgo: 12.5,
+    elapsedMinutes: 95,
+    runs: [
+      { testCaseKey: 'login-valid', outcome: 'Pass' },
+      { testCaseKey: 'login-invalid', outcome: 'Pass' },
+      { testCaseKey: 'lockout', outcome: 'Fail' },
+      { testCaseKey: 'reset-password', outcome: 'Pass' },
+      { testCaseKey: 'signup', outcome: 'Pass', by: 'owner' },
+    ],
+  },
+  {
+    key: 'search-regression',
+    name: 'Search regression',
+    description: 'Search and filters after the index rebuild.',
+    status: 'Done',
+    environmentKey: 'qa',
+    browser: 'Firefox',
+    viewport: [1280, 720],
+    locale: 'en-US',
+    timezone: 'UTC',
+    autoCreateBug: false,
+    createdBy: 'owner',
+    createdDaysAgo: 13,
+    readyDaysAgo: 12.6,
+    startedDaysAgo: 12,
+    completedDaysAgo: 11.9,
+    signedOffDaysAgo: 11.5,
+    elapsedMinutes: 60,
+    runs: [
+      { testCaseKey: 'search-keyword', outcome: 'Pass' },
+      { testCaseKey: 'search-empty', outcome: 'Fail' },
+      { testCaseKey: 'filter-price', outcome: 'Pass' },
     ],
   },
   {
@@ -505,9 +615,18 @@ export const EXECUTIONS: DemoExecution[] = [
   },
 ];
 
+/** Carried by the seeded bugs in uneven numbers, so the Bugs dashboard's tag cloud has sizes (specs/demo-seed). */
+export const TAGS: DemoTag[] = [
+  { key: 'checkout', name: 'checkout', color: 'red', createdDaysAgo: 46 },
+  { key: 'auth', name: 'auth', color: 'blue', createdDaysAgo: 46 },
+  { key: 'payments', name: 'payments', color: 'violet', createdDaysAgo: 46 },
+  { key: 'mobile', name: 'mobile', color: 'teal', createdDaysAgo: 46 },
+];
+
 export const BUGS: DemoBug[] = [
   {
     key: 'lockout-not-locking',
+    tagKeys: ['auth'],
     title: 'Account does not lock after five failed sign-ins',
     severity: 'High',
     status: 'Resolved',
@@ -522,6 +641,7 @@ export const BUGS: DemoBug[] = [
   },
   {
     key: 'guest-address-lost',
+    tagKeys: ['checkout'],
     title: 'Guest checkout loses the shipping address on back navigation',
     severity: 'Critical',
     status: 'Closed',
@@ -536,6 +656,7 @@ export const BUGS: DemoBug[] = [
   },
   {
     key: 'three-ds-auto',
+    tagKeys: ['checkout', 'payments'],
     title: 'Pay with a card requiring 3-D Secure',
     // AUTO_CREATED_SEVERITY: what the API gives an auto-created bug.
     severity: 'Medium',
@@ -551,6 +672,7 @@ export const BUGS: DemoBug[] = [
   },
   {
     key: 'reset-link-expired',
+    tagKeys: ['auth'],
     title: 'Password reset link expires immediately',
     severity: 'Critical',
     status: 'Open',
@@ -564,6 +686,7 @@ export const BUGS: DemoBug[] = [
   },
   {
     key: 'lockout-counter-reset',
+    tagKeys: ['auth'],
     title: 'Lockout counter resets after a page reload',
     severity: 'High',
     status: 'Open',
@@ -603,6 +726,7 @@ export const BUGS: DemoBug[] = [
   },
   {
     key: 'mobile-images-slow',
+    tagKeys: ['mobile'],
     title: 'Product images load slowly on mobile',
     severity: 'Medium',
     status: 'WontFix',
@@ -613,5 +737,19 @@ export const BUGS: DemoBug[] = [
     reporter: 'contributor',
     createdDaysAgo: 13,
     statusChange: { from: 'Open', daysAgo: 10, by: 'owner' },
+  },
+  {
+    // Idle and Old on the Bugs dashboard (specs/demo-seed): never updated since filing.
+    key: 'order-email-currency',
+    tagKeys: ['checkout'],
+    title: 'Order confirmation email shows the wrong currency symbol',
+    severity: 'Medium',
+    status: 'Open',
+    description: 'Orders paid in EUR get a confirmation email showing "$" before the total.',
+    stepsToReproduce: '1. Switch the store currency to EUR\n2. Place an order\n3. Open the confirmation email',
+    failedStep: null,
+    autoCreated: false,
+    reporter: 'contributor',
+    createdDaysAgo: 45,
   },
 ];

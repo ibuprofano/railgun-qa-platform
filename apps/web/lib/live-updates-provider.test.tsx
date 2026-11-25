@@ -97,6 +97,19 @@ describe('LiveUpdatesProvider', () => {
     );
   });
 
+  it("report.changed invalidates that report's status (report-pipeline)", async () => {
+    const { invalidate } = renderProvider('p1');
+    await waitFor(() => expect(streams).toHaveLength(1));
+    act(() => streams[0].send(ready));
+    await screen.findByText('connected');
+
+    act(() => streams[0].send('event: report.changed\ndata: {"type":"report.changed","projectId":"p1","reportId":"r1"}\n\n'));
+
+    await waitFor(() =>
+      expect(invalidate.mock.calls.map(([filters]) => filters)).toEqual([{ queryKey: ['projects', 'p1', 'reports', 'r1'] }]),
+    );
+  });
+
   it("run.bugs.changed invalidates that run's bug list and its execution's history", async () => {
     const { invalidate } = renderProvider('p1');
     await waitFor(() => expect(streams).toHaveLength(1));

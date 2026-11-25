@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useApiClient } from '../../lib/api-client';
 import { getEnvironment, revealCredential } from '../../lib/environments-api';
+import { environmentKeys } from '../../lib/environment-keys';
 import type { ProjectRole } from '../../lib/test-case-permissions';
 import { ActionError } from '../action-error';
 import { Button } from '@/components/ui/button';
@@ -30,7 +31,7 @@ export function EnvironmentPanel({ projectId, environmentId, open, role, onClose
   const [revealed, setRevealed] = useState<Record<string, string>>({});
 
   const { data: environment, isLoading } = useQuery({
-    queryKey: ['projects', projectId, 'environments', environmentId],
+    queryKey: environmentKeys.detail(projectId, environmentId),
     queryFn: () => getEnvironment(apiClient, projectId, environmentId),
     enabled: open,
   });

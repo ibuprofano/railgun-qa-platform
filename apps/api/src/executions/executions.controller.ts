@@ -31,6 +31,8 @@ import {
   logExecutionActivity,
 } from './execution-queries';
 import { parseAfterRunId, reorderAfter } from './run-order';
+import { loadExecutionDashboard } from './execution-dashboard';
+import type { ExecutionDashboardData } from '@railgun-qa/reporting';
 import { emitExecutionChanged } from '../realtime/live-event';
 import { listExecutionHistory } from '../common/activity-log-reader';
 import { type ActivityHistoryResponse, parseHistoryCursor, toHistoryResponse } from '../common/activity-history';
@@ -138,6 +140,22 @@ export class ExecutionsController {
   async list(@Param('projectId') projectId: string, @Req() request: AuthenticatedRequest): Promise<ExecutionResponse[]> {
     const workspaceId = await resolveProjectWorkspaceId(this.prisma, request.auth!.userId, projectId);
     return withTenantContext(this.prisma, workspaceId, (tx) => listExecutions(tx, projectId));
+  }
+
+  /**
+   * The Executions dashboard's rows (design.md decision 4). Declared above ':executionId'
+   * so Nest matches it first; a test checks `dashboard` is never read as an id.
+   */
+  @Get('dashboard')
+  @UseGuards(ProjectRoleGuard)
+  @RequireProjectRole('Viewer')
+  async dashboard(
+    @Param('projectId') projectId: string,
+    @Query('tz') tz: unknown,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<ExecutionDashboardData> {
+    const workspaceId = await resolveProjectWorkspaceId(this.prisma, request.auth!.userId, projectId);
+    return withTenantContext(this.prisma, workspaceId, (tx) => loadExecutionDashboard(tx, projectId, tz));
   }
 
   @Get(':executionId')

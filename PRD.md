@@ -42,7 +42,7 @@ A batched grouping of test cases to be executed together in a single session. An
 One instance of a single test case within an execution. Each run has its own outcome (Pass, Fail, Needs Review, etc.) and may hold multiple attempts, step-by-step results, AI confidence scores, and linked bug reports.
 
 ### 2.9 Bug
-A defect report tied to a specific observation or failing test. Bugs have a severity, a lifecycle status, optional images, and optional links to the test run and test case that exposed them.
+A defect report tied to a specific observation or failing test. Bugs have a severity, a lifecycle status, optional images, and optional links to the test run and test case that exposed them. A bug records when it was resolved: the moment it enters Resolved, Closed or Won't Fix. Moving it back to Open or In Progress clears that date. Resolution metrics use this date (Section 6.12).
 
 ### 2.10 Activity Log
 An immutable, chronological audit trail of every significant action taken within a project — who did what, to which entity, and when.
@@ -141,18 +141,29 @@ The main application uses a persistent sidebar that contains:
 
 ### 6.1 Overview Dashboard
 
-**Purpose:** A real-time health command centre for the active project, giving stakeholders an at-a-glance view of quality status and trends.
+**Purpose:** A real-time health command centre for the active project, giving stakeholders an at-a-glance view of quality status and trends. Every figure follows the shared definitions in Section 6.12.
 
-**Content:**
+**Layout (top to bottom):**
+1. **Header:** the title "Overview", the active project's name, and a **Download report** button once the data has loaded.
+2. **KPI tiles:** the seven tiles in one row on wide screens, wrapping on narrower ones.
+3. **Health Score trend:** a line chart across the full width.
+4. **Pass Rate trend** and **Bug Velocity:** two line charts side by side.
+5. **Run Outcomes donut, Top Failing Tests and Urgent Bugs:** three cards side by side.
+6. **Recent History:** a feed with a **Full History** link.
 
 **KPI Tiles (7 total):**
-1. **Health Score** — A composite score with a status label: Healthy, At Risk, or Critical (see the definition below).
-2. **Total Test Cases** — Count of all test cases, with the percentage that are in "Ready" status shown as a sub-label.
-3. **Coverage** — The percentage of test cases that have been run at least once.
-4. **Pass Rate** — The pass rate over the last 30 days.
-5. **Active Runs** — The number of executions currently in progress.
-6. **Open Bugs** — Count of bugs in open states.
-7. **Critical Bugs** — Count of bugs with Critical severity.
+
+| Tile | Value | Definition | Sub-label |
+|---|---|---|---|
+| **Health Score** | 0–100, or "No data" | The composite score defined below | Healthy, At Risk or Critical. The value, icon and tile outline take the band's colour (green, amber, red). |
+| **Total Test Cases** | count | All of the project's test cases | "N% ready": the share whose status is Ready |
+| **Coverage** | % | Test cases run at least once (Section 6.12.1) | "run at least once" |
+| **Pass Rate** | %, or "—" | Pass rate of the runs completed in the last 30 days | "last 30 days" |
+| **Active Runs** | count | Executions whose status is In Progress | "executions in progress" |
+| **Open Bugs** | count | Bugs that are Open or In Progress | "open + in progress" |
+| **Critical Bugs** | count | Open bugs whose severity is Critical | "open critical" |
+
+Each tile with a derived value has an info tooltip that explains it in plain words. The Health Score tooltip lists its four components and their weights.
 
 **Health Score definition:**
 The Health Score is a number from 0 to 100 that combines four components:
@@ -164,24 +175,37 @@ The Health Score is a number from 0 to 100 that combines four components:
 | Bug pressure | 25% | 100 minus a penalty for each open bug (25 points per Critical, 10 per High, 3 per Medium; Low bugs carry no penalty), never below 0 |
 | Freshness | 15% | Percentage of Ready test cases that have been run in the last 14 days |
 
-Status labels: **Healthy** 80–100, **At Risk** 60–79, **Critical** below 60. A project with no runs yet shows "No data" instead of a score. The Health Score trend chart shows the score as it stood on each day of the selected period.
+Status labels: **Healthy** 80–100, **At Risk** 60–79, **Critical** below 60. A project with no runs yet shows "No data" instead of a score. A project with runs, but none in the last 30 days, scores 0 for the pass-rate component. A project with no Ready test cases scores 0 for freshness.
 
-**Charts (all selectable time ranges: 7, 15, 30, or 90 days):**
-- **Health Score trend** — Line chart of health score over the selected period.
-- **Pass Rate trend** — Line chart of pass rate over the selected period.
-- **Bug Velocity** — Line chart comparing bugs reported versus bugs resolved over time.
-- **Run Outcomes donut** — Split of Pass, Fail, and Needs Review for the last 30 days.
+**Charts (all selectable time ranges: 7, 15, 30, or 90 days; each chart keeps its own range, default 30):**
+- **Health Score trend:** a line chart of the score as it stood at the end of each day of the range. Each day is computed from the record as of that day:
+  - the pass rate over the 30 days ending that day
+  - coverage, from the test cases that existed and the runs completed by that day
+  - bug pressure, from the bugs that were open at the end of that day: reported by then, and not yet resolved by their resolution date
+  - freshness, from the test cases that were Ready that day and the runs completed in the 14 days before it
+
+  Days before the project's first completed run have no score and are left off the line.
+- **Pass Rate trend:** a line chart of each day's pass rate, over the runs completed that day. A day with no completed runs shows 0%, as the chart's tooltip explains (Section 6.12.2).
+- **Bug Velocity:** a line chart with two series, **Reported** (bugs reported that day) and **Resolved** (bugs whose resolution date falls on that day), so the team can see whether the backlog is growing.
+- **Run Outcomes donut:** the split of Pass, Fail and Needs Review over the runs completed in the last 30 days. It has a fixed 30-day range, the total in the centre, and each count with its percentage in the legend. Empty state: "No completed runs yet."
 
 **Panels:**
-- **Top Failing Tests** — A ranked list of the test cases with the highest failure rate, each clickable to navigate to that test case.
-- **Urgent Bugs** — A list of open Critical and High severity bugs, each clickable to navigate to that bug.
-- **Recent History** — A feed of the last ~10 activity events showing user avatar initials, action description, and relative timestamp. A "Full History" link opens a paginated modal with infinite scroll.
+- **Top Failing Tests:** up to 6 test cases with the highest fail rate over all their completed runs. A test case needs at least 3 completed runs and a fail rate above 0 to appear.
+  - Sorted by fail rate, then by number of failures.
+  - The rate is shown red at 75% or more and amber at 40% or more.
+  - Each row reads "X of Y runs failed" and opens the test case in a new tab.
+  - Empty state: "No failing tests — nice!", with a check mark.
+- **Urgent Bugs:** up to 6 open bugs of Critical or High severity, Critical first, then the most recently reported.
+  - Each row shows a severity badge, the title, and "<status> · opened <relative time>" (for example "Open · opened 3d ago").
+  - Each row opens the bug in a new tab.
+  - Empty state: "No critical or high open bugs."
+- **Recent History:** the 10 most recent activity events, on a vertical timeline. Each shows the actor's avatar initials, the action as a sentence coloured by its kind, the entity's icon and a relative time ("just now", "5m ago", "3h ago", "2d ago", then the date). Entries use the same wording as the Activity screen (Section 6.6). A **Full History** link opens a dialog with the project's complete feed, which loads older entries on demand.
 
 **User Actions:**
 - Adjust the time range for any chart independently.
 - Click items in the Top Failing Tests or Urgent Bugs panels to navigate.
-- Open the full activity history modal.
-- Download the dashboard as a PDF report.
+- Open the full activity history dialog.
+- Download the dashboard as a PDF report, which reflects the selected ranges (Section 8). The button reads "Generating…" until the file is ready.
 
 ---
 
@@ -213,18 +237,75 @@ When a test case is selected, the right panel shows:
   - *Dormant:* Its last run was more than 14 days ago.
   - *Degrading:* Its pass rate over its last 5 runs is at least 20 percentage points lower than over the 5 runs before them (requires at least 10 runs).
   - *Improving:* The same comparison, at least 20 percentage points higher.
-  - *Trend Reset:* The Gherkin script was edited recently; runs before the edit are excluded from the Degrading/Improving comparison until enough new runs accumulate.
+  - *Trend Reset:* The Gherkin script was edited recently; runs before the edit are excluded from the Degrading/Improving comparison until enough new runs accumulate (10 runs completed after the edit; ADR 0025).
 - **Gherkin script editor** — A plain text area for the scenario script; saves automatically when the user clicks away.
 - **Run history table** — The last 10 runs showing execution name, outcome, AI confidence %, duration, and date. A link to the full history is available.
 - **Run button** with a dropdown offering two options: (a) create a brand-new execution containing this test case, or (b) add it to an existing execution.
 
 #### 6.2.4 Test Cases Dashboard View
-An aggregate statistics view showing:
-- Status breakdown (pie/donut chart of Draft, Ready, Deprecated counts).
-- Coverage gauge.
-- Outcome distribution chart.
-- Per-case health rows.
-- A download button for the dashboard as a PDF report.
+Aggregate statistics across the project's test cases, using the shared definitions in Section 6.12.
+
+**Entry and states:**
+- The dashboard is the default right-panel view: it shows when nothing is selected. Selecting a folder still shows that folder's summary (Section 6.2.1), and selecting a test case, or opening an address that links to one, shows its detail. The Dashboard toggle returns to the dashboard from either (ADR 0025).
+- While loading, it shows a title placeholder and four tile placeholders.
+- With no test cases, it shows an empty state: "No test cases yet" with the hint "Create test cases to start seeing metrics". There is no download button.
+
+**Layout (top to bottom):** stat tiles → two trend charts → two donuts → Needs Attention table → a 2 × 2 grid of rankings → Folder Health table → the collapsible History panel.
+
+**Stat tiles:**
+
+| Tile | Value | Sub-label |
+|---|---|---|
+| **Total Tests** | count of test cases | "N ready" |
+| **Ready** | Ready ÷ total, as % | "N of M cases" |
+| **Coverage** | test cases with at least one completed run ÷ total, as % (the same definition as the Overview) | "N never run" |
+| **Avg Confidence** | the mean AI confidence of each test case's latest completed automated run, as %, or "—" | "from last run results" |
+
+**Charts:**
+
+| Chart | Type | What it shows |
+|---|---|---|
+| **Test Cases Over Time** | line chart, 3 series, own range | Per day: test cases **created**; runs **added** to executions; runs **completed** |
+| **Pass Rate Trend** | line chart, own range | Per day: the pass rate of the runs completed that day. Shown only once the project has at least one completed run; until then, Test Cases Over Time takes the full width. |
+| **Last Run Outcome** | donut | Test cases by the outcome of their latest completed run: Pass, Fail, Needs Review, and Never Run for those with none |
+| **Source Type** | donut | Test cases by source type: Gherkin or Manual |
+
+**Needs Attention table:** lists every test case with at least one issue (Section 6.12.1):
+
+| Issue | Rule | Badge |
+|---|---|---|
+| No Script | The test case has no Gherkin script | amber |
+| Orphan | Never added to any execution | amber |
+| Never Run | Added to an execution, but no completed run yet | amber |
+| Dormant | Its last completed run was more than 14 days ago | amber |
+| Degrading | As defined for the Degrading health banner | red |
+
+- The heading shows a count and an info tooltip that defines each badge.
+- A name filter narrows the rows as the user types.
+- Sortable columns: Test Case (with its tags), Issue, Status, Created and Last Updated: the last change to its name, script, status or tags, or a move. The default sort is Created, oldest first.
+- The first 10 rows show, then a "Show N more" control.
+- A row opens the test case in a new tab.
+
+**Rankings (2 × 2 grid, top 10 each):**
+
+| Ranking | Includes | Value shown |
+|---|---|---|
+| **Most Run Test Cases** | Test cases with at least one completed run, most first | number of completed runs |
+| **Top Failing Test Cases** | Test cases with at least 3 completed runs and at least one Fail, highest fail rate first | the fail rate in red, then "(failed/completed)" |
+| **Top Flaky Test Cases** | Test cases with at least one flaky run (Section 6.12.1) | flaky runs ÷ completed runs, in amber, then "(flaky/completed)" |
+| **Top Tags** | Tags by how many test cases carry them | the tag and its count. Not clickable. |
+
+Every row shows its rank and the name. In the first three rankings, a row opens the test case in a new tab. Each ranking has its own empty-state line.
+
+**Folder Health table:** one row per folder that directly holds test cases, sorted by issue rate, highest first.
+- **Folder:** the full path, joined with " / ".
+- **Cases:** how many test cases it holds directly.
+- **Issues:** how many of them have at least one issue, and the percentage. Shown red at 50% or more, amber below that, and as a green "—" when none do.
+- **Breakdown:** one badge per issue kind, with its count (for example "Dormant ×3").
+
+**History panel:** the latest test case activity (Section 6.12.4).
+
+**Download:** a PDF of this dashboard for the ranges selected on each trend chart (Section 8).
 
 #### 6.2.5 User Actions
 
@@ -335,7 +416,61 @@ Accessible from any execution detail view. Opens a full-screen visual graph with
 Directed edges connect related entities. Hovering a node highlights its entire lineage (all ancestors and descendants). Clicking a node navigates to that entity's detail view.
 
 #### 6.3.6 Executions Dashboard View
-An aggregate view showing outcome trends, execution volume, and other cross-execution statistics. Includes a download button for the dashboard as a PDF report.
+Aggregate statistics across executions and their runs, using the shared definitions in Section 6.12. It is the most interactive dashboard: its charts filter the runs table below them, and the PDF export reflects every active filter.
+
+**Entry and states:**
+- The dashboard is the default right-panel view, unless the address links to a specific execution, which opens that execution's detail instead. The Dashboard toggle returns to it at any time.
+- While loading, it shows placeholders, with the History panel already visible below them.
+- With no executions, it shows an empty state: "No executions yet" with the hint "Create an execution to start seeing metrics". There is no download button.
+
+**Scope follows the list filters:** the dashboard covers exactly the executions the execution list currently shows. When any list filter is on (name, status, environment, browser, tags; Section 6.3.2), a notice above the tiles names the active filters. Clearing them returns the dashboard to all executions.
+
+**Stat tiles:**
+
+| Tile | Value | Sub-label |
+|---|---|---|
+| **Executions** | count of executions in scope | "N active" (In Progress or Paused) |
+| **Total Runs** | all runs of those executions | "N completed" |
+| **Pass Rate** | pass rate of their completed runs | "X of Y runs", or "no results yet" |
+| **Avg Duration** | the mean duration of their runs that have one, in seconds with one decimal, or "—" | "per test run" |
+
+**Charts:**
+
+| Chart | Type | What it shows | Clicking it |
+|---|---|---|---|
+| **Executions Over Time** | line chart, own range | Executions completed per day | — |
+| **Runs Over Time** | stacked bars per day: Passed, Failed, Needs Review; own range | Runs completed per day, by outcome | A segment filters the runs table to that day and outcome, switching it to All Runs. Clicking the segment again clears that filter. |
+| **Execution Status** | donut, parts sorted by count | Executions per status, in the execution status colours | A part sets the execution list's status filter to that status, and the whole dashboard follows |
+| **Run Outcomes** | donut | Runs by current outcome: Pass, Fail, Needs Review, Pending | A part filters the runs table to that outcome and clears any day filter. Clicking it again clears it. |
+
+Execution status colours: Draft grey, Ready green, In Progress blue, Paused amber, Completed dark green, Done muted grey, Canceled muted red.
+
+**Runs table:** one row per run across the executions in scope.
+- **Tabs:** **Needs Attention** (the default; runs whose outcome is Needs Review, with a count) and **All Runs**.
+- **Filters**, applied in this order: the tab, then the outcome filter, then the day-and-outcome filter, then a name filter. The name filter matches either the test case's or the execution's name.
+- **Active filter label:** the current chart filter is named next to a **Clear filter** control, for example "Pass" or "Mar 4 · Failed".
+- **Columns**, all sortable:
+  - Order: the run's position in its execution.
+  - Test Case: the name; the failed step in red, when one was recorded; the execution's name below.
+  - Outcome.
+  - Attempts: how many times the run was run, including earlier attempts.
+  - Bugs: bugs linked to the run, red when above 0.
+  - Created.
+  - Last Updated: when its current outcome was recorded.
+- **Loading:** the table shows its first rows and loads more as the user scrolls, with a "N of M" counter. Changing any filter or sort starts again from the top.
+- **Opening a run:** clicking a row opens that run in its execution, in a new tab.
+- **Empty states:** "No runs need review." on Needs Attention, and "No runs match this filter." otherwise.
+
+**Export:** the download button reads **Download report**, or **Download filtered report** while any dashboard filter is on (the Needs Attention tab counts as one). It opens a dialog with:
+- two switches:
+  - **Test Executions**: on by default, showing how many executions are in scope.
+  - **Runs**: off by default. Its label follows the open tab, "Needs Attention" or "Runs".
+- a notice listing the active list filters and the active runs-table filter
+- **Download PDF**, disabled while both switches are off. It reads "Generating…" until the file is ready, and shows an error if the export fails.
+
+The PDF uses the selected chart ranges and the same filtered set (Section 8).
+
+**History panel:** a collapsible panel (Section 6.12.4) with two tabs, **Executions** and **Runs**, each showing that area's latest activity. "See full history" opens the tab that is open.
 
 ---
 
@@ -376,7 +511,67 @@ Filtering options: by name, status, severity.
 - **Delete button** (Admins only).
 
 #### 6.4.4 Bugs Dashboard View
-Aggregate charts covering bug status distribution, severity distribution, and trends over time. Includes a download button for the dashboard as a PDF report.
+Aggregate bug metrics for the project, using the shared definitions in Section 6.12.
+
+**Entry and states:**
+- The dashboard is the default right-panel view, unless the address links to a specific bug, which opens that bug's detail instead.
+- A Dashboard control in the list header switches to the dashboard and clears the selected bug.
+- A row in the dashboard's Needs Attention table opens that bug's detail.
+- While loading, it shows a title placeholder and four tile placeholders.
+- With no bugs, it shows an empty state: "No bugs yet" with the hint "Report a bug to start seeing metrics". There is no download button.
+
+**Layout (top to bottom):**
+1. A header, "Dashboard", with "Aggregate bug metrics for this project" and **Download report**.
+2. Four stat tiles.
+3. Two trend charts.
+4. Two donuts: All Bugs by Severity and All Bugs by Status.
+5. Two donuts: Open by Severity and Backlog Age.
+6. Avg Resolution Time, next to the Bugs by Tag cloud.
+7. The Needs Attention table, shown only when it has rows.
+
+**Stat tiles:**
+
+| Tile | Value | Sub-label |
+|---|---|---|
+| **Total Bugs** | all bugs | "N in progress" |
+| **Open** | bugs whose status is Open | "needs attention" |
+| **Resolved** | bugs whose status is Resolved (not Closed or Won't Fix) | "of N total" |
+| **Critical (all time)** | bugs whose severity is Critical, in any status | "highest severity" |
+
+The Critical tile counts Critical bugs of every status, unlike the Overview's Critical Bugs tile, which counts open ones only. Its label says "all time" so the two are never confused.
+
+**Charts:**
+
+| Chart | Type | What it shows |
+|---|---|---|
+| **Reported vs Resolved** | line chart, 2 series | Per day: bugs reported, and bugs resolved (by resolution date) |
+| **Reported vs Resolved — Critical** | line chart, 2 series | The same, for Critical bugs only |
+| **All Bugs by Severity** | donut | Bugs per severity, all statuses |
+| **All Bugs by Status** | donut | Bugs per status: Open, In Progress, Resolved, Closed, Won't Fix |
+| **Open by Severity** | donut | Open bugs (Open or In Progress) per severity |
+| **Backlog Age** | donut, with a tooltip explaining the buckets | Open bugs by time since they were reported: under 7 days (Fresh), 7–30 days (Aging), over 30 days (Old) |
+
+The two line charts share one range selector (7, 15, 30 or 90 days, default 30), which the PDF export also uses.
+
+**Avg Resolution Time:**
+- For each severity that has resolved bugs: the average time from reported to resolution date, rounded to whole days.
+- Each row shows the severity's colour dot, its name, "Nd" and "(n bugs)".
+- Empty state: "No resolved bugs yet".
+
+**Bugs by Tag:** a word cloud of the tags used on bugs.
+- Each tag is sized by how many bugs carry it. Size grows with the square root of the count, between a minimum and a maximum, and every tag is the same size when all counts are equal.
+- Large and small tags are interleaved, so the large ones don't cluster.
+- Each word uses its tag's colour. A tag without one gets a colour that always stays the same for that tag.
+- Hovering a tag shows "name: count".
+- Empty state: "No tagged bugs yet."
+
+**Needs Attention table:** open bugs that match at least one rule:
+- **Idle** (amber badge): no update for 30 days or more.
+- **Unattended** (red badge): Critical or High severity, and still in Open status.
+
+Rows are sorted Unattended first, then by severity (Critical first), then by the longest time since the last update. The heading shows a count and an info tooltip that defines both badges. Columns: Bug (the title, truncated when long), Issue (the badges), Severity (colour dot and name) and Status.
+
+**Download:** a PDF of this dashboard for the selected range (Section 8).
 
 ---
 
@@ -517,6 +712,67 @@ Event categories: invitations (sent, accepted, declined, revoked) and membership
 
 ---
 
+### 6.12 Dashboard Metrics & Conventions
+
+**Purpose:** One set of definitions shared by the four dashboards: the Overview (Section 6.1) and the Test Cases, Executions and Bugs dashboard views (Sections 6.2.4, 6.3.6, 6.4.4). Every number in this section means the same thing wherever it appears, on screen and in the dashboard PDFs (Section 8).
+
+#### 6.12.1 What is counted
+- **Scope:** every dashboard covers the active project only. Items in the Trash are excluded (Section 2.11): deleted test cases, folders and bugs, and the runs of deleted executions.
+- **Runs counted:** each run's current outcome. Outcomes from an execution's earlier attempts (kept as attempt history after a Restart, Section 6.3.4) are *stale* and are never counted in any rate, count or chart.
+- **Completed run:** a run whose outcome is Pass, Fail or Needs Review. A Pending run is not completed. A run's completion time is the moment its current outcome was recorded.
+- **Pass rate:** Pass ÷ (Pass + Fail + Needs Review), over the completed runs in the period. With no completed runs in the period, the pass rate is "no data", shown as "—".
+- **Fail rate:** Fail ÷ (Pass + Fail + Needs Review), over the same runs.
+- **Coverage:** the share of the project's test cases that have at least one completed run, at any time.
+- **Flaky run:** a run whose current outcome is Pass, while an earlier attempt of the same execution recorded Fail or Needs Review for it.
+- **Open bug:** a bug whose status is Open or In Progress.
+- **Resolved bug:** a bug whose status is Resolved, Closed or Won't Fix. A bug's resolution date is the moment it entered one of those statuses (Section 2.9). It is not affected by later edits, such as a title change.
+- **Test case issues:** the No Script, Orphan, Never Run, Dormant and Degrading flags. These are the same rules as the test case health banners (Section 6.2.3); No Script means the test case has no Gherkin script.
+- **Automation-only figures:** AI confidence and run duration only exist for automated runs (Section 9). Until there are any, widgets built on them show "—".
+
+#### 6.12.2 Time ranges and trends
+- Every trend chart has its own range selector: 7, 15, 30 or 90 days, default 30. Changing one chart's range never changes another's.
+- A range ends today and counts whole calendar days, in the viewer's time zone. The Health Score trend is the one exception: its days are UTC days, because each day's score is recorded once for everyone (ADR 0024).
+- A trend chart has one point per day in the range. A day with no data shows 0. For rate series such as pass rate, the chart's info tooltip says that days with no runs are drawn as 0.
+- Hovering a chart shows the values for the nearest day. In a chart with several series, the legend can hide or show each series.
+- A PDF export uses exactly the ranges selected on screen, 15 days included.
+
+#### 6.12.3 Thresholds
+These are fixed, project-wide values. Dormant and Degrading are intended to become configurable per project in Project Settings (Section 6.7). The others stay fixed.
+
+| Threshold | Value | Used by |
+|---|---|---|
+| Health Score bands | Healthy 80–100, At Risk 60–79, Critical below 60 | Overview |
+| Dormant | last completed run more than 14 days ago | Test case banners, Test Cases dashboard |
+| Degrading | pass rate over the last 5 runs at least 20 percentage points below the 5 before them (needs 10 runs) | Test case banners, Test Cases dashboard |
+| Minimum runs to rank a failing test | 3 completed runs | Overview, Test Cases dashboard |
+| Fail-rate emphasis | 75% or more red, 40% or more amber | Overview, Test Cases dashboard |
+| Idle bug | no update for 30 days or more | Bugs dashboard |
+| Backlog age buckets | under 7 days, 7–30 days, over 30 days | Bugs dashboard |
+| Folder issue emphasis | 50% or more of its test cases with an issue red, otherwise amber | Test Cases dashboard |
+
+#### 6.12.4 Common building blocks
+- **Stat tile:** an icon, a short uppercase label, an info tooltip for any figure whose meaning isn't obvious, a large value and a one-line sub-label. The Overview's tiles also change colour by status where the tile defines one.
+- **Section card:** a titled panel holding one chart, list or table.
+- **Charts:** line charts for trends, stacked bars for daily outcome counts, donuts for parts of a whole, and a word cloud for tag usage. A donut shows its total in the centre and a legend with each part's count and percentage. Parts with a count of 0 are hidden.
+- **Loading:** every tile and widget shows a placeholder shaped like its content until its data arrives.
+- **Empty states:**
+  - When a dashboard has nothing to show at all (no test cases, executions or bugs yet), it shows one large empty state with a hint on how to start, and no download button.
+  - An individual widget with no data shows one short line in its place, for example "No completed runs yet.".
+- **Ranked lists:** each row has a rank number, the item's name (truncated when long) and a right-aligned value. A row opens the item in a new tab. The Overview's lists show at most 6 rows, the dashboard views' at most 10.
+- **Colours:** each outcome, execution status, bug status and severity has one colour, used the same way on every dashboard, list and badge:
+  - Pass, Resolved and Fresh are green.
+  - Fail, Critical, Reported and Old are red.
+  - Needs Review, Medium and Aging are amber or yellow.
+  - High is orange.
+  - In Progress, Low and Manual are blue.
+  - Gherkin and "added to an execution" are violet.
+  - Pending, Never Run and Done are muted grey.
+- **History panel:** the Test Cases and Executions dashboard views end with a collapsible panel showing the latest 5 activity entries for that area. It is collapsed by default, with a count badge ("5+" when there are more) and a "See full history" link that opens the paged full history. The entries read as on the Activity screen (Section 6.6).
+- **Freshness:** opening a dashboard, or switching to a dashboard view, always shows current data. Dashboards don't need to update live while open.
+- **Access:** every project member (Viewer and above) can see every dashboard and download its PDF. Nobody can see, or export, the dashboard of a project they have no access to. Downloading a dashboard PDF is recorded in the Activity log.
+
+---
+
 ## 7. Creation Flows
 
 ### 7.1 New Test Case Flow
@@ -596,14 +852,16 @@ The platform provides downloadable reports at multiple levels:
 |---|---|---|---|
 | **Execution HTML Report** | Execution detail view | Standalone HTML file | Execution metadata, all test runs with step-by-step results, Gherkin scripts, linked bugs, and image attachments embedded in the file (no internet connection required to view) |
 | **Execution PDF Report** | Execution detail view | PDF | Same data as the HTML report, in a print-ready format |
-| **Overview Dashboard PDF** | Overview screen | PDF | Project health KPIs and trend charts for the selected time range |
-| **Test Cases Dashboard PDF** | Test Cases dashboard view | PDF | Test case status breakdown, coverage, and outcome distribution |
-| **Executions Dashboard PDF** | Executions dashboard view | PDF | Execution outcome trends and aggregate statistics |
-| **Bugs Dashboard PDF** | Bugs dashboard view | PDF | Bug status distribution, severity breakdown, and trend charts |
+| **Overview Dashboard PDF** | Overview screen | PDF | Everything on the Overview: the KPI tiles, the trend charts for the ranges selected on screen, the Run Outcomes split, Top Failing Tests, Urgent Bugs and recent history |
+| **Test Cases Dashboard PDF** | Test Cases dashboard view | PDF | The stat tiles, both trend charts for their selected ranges, the donuts, the Needs Attention table, the rankings and Folder Health |
+| **Executions Dashboard PDF** | Executions dashboard view | PDF | The executions in scope (the list filters), the stat tiles and charts for their selected ranges, and, when chosen in the export dialog, the executions and the runs matching the runs-table filter, each with the active filters named |
+| **Bugs Dashboard PDF** | Bugs dashboard view | PDF | The stat tiles, both Reported vs Resolved charts for the selected range, the donuts, Avg Resolution Time, the tag counts and the Needs Attention table |
 
 Reports are generated in the background: the user sees a "generating" state and is notified, with a download link, when the file is ready.
 
 No report or export ever contains stored credentials, tokens, or API keys.
+
+A dashboard PDF always shows the same numbers as the screen it was downloaded from: the same definitions (Section 6.12), ranges and filters. Downloading a report is recorded in the Activity log.
 
 ---
 
@@ -655,7 +913,7 @@ The following features are partially scaffolded in the UI but are not yet fully 
 ### 10.5 Reviewing Project Health
 1. A manager opens the Overview Dashboard.
 2. They review the Health Score and trend charts.
-3. They spot a rise in the bug velocity chart and click into the Urgent Bugs panel.
+3. They spot more bugs reported than resolved in the Bug Velocity chart and click into the Urgent Bugs panel.
 4. They click a critical bug to open its detail and see which test case surfaced it.
 5. They use the traceability graph to follow the chain from bug → run → execution → test case.
 6. They download the Overview Dashboard PDF to share with stakeholders.

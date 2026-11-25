@@ -4,10 +4,10 @@ import { BugsScreen } from './bugs-screen';
 import { BugList } from './bug-list';
 import { BugDetail } from './bug-detail';
 import { BugFormDialog } from './bug-form-dialog';
-import { createBug, deleteBug, getBug, listBugs, updateBug } from '../../lib/bugs-api';
+import { createBug, deleteBug, getBug, getBugDashboard, listBugs, updateBug } from '../../lib/bugs-api';
 import { useSessionContext } from '../../lib/session-context';
 import { renderWithProviders } from '../../test/render-with-providers';
-import { makeBug } from '../../test/bug-fixtures';
+import { daysAgo, makeBug, makeBugDashboard, makeDashboardBug } from '../../test/bug-fixtures';
 import { makeRun } from '../../test/execution-fixtures';
 import { listBugActivity } from '../../lib/activity-api';
 
@@ -47,6 +47,7 @@ vi.mock('../../lib/bugs-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/bugs-api')>()),
   listBugs: vi.fn(),
   getBug: vi.fn(),
+  getBugDashboard: vi.fn(),
   createBug: vi.fn(),
   updateBug: vi.fn(),
   deleteBug: vi.fn(),
@@ -73,6 +74,61 @@ describe('BugsScreen', () => {
     } as ReturnType<typeof useSessionContext>);
     vi.mocked(listBugs).mockResolvedValue([makeBug({ id: 'bug-1', title: 'First' }), linkedBug]);
     vi.mocked(getBug).mockImplementation(async (_client, _projectId, id) => (id === linkedBug.id ? linkedBug : makeBug({ id, title: 'First' })));
+    vi.mocked(getBugDashboard).mockReset().mockResolvedValue(
+      makeBugDashboard({
+        bugs: [
+          makeDashboardBug({ id: 'bug-lockout', title: 'Lockout counter resets after a page reload', severity: 'High', status: 'Open' }),
+          makeDashboardBug({ id: 'bug-idle', title: 'Footer link is stale', severity: 'Low', status: 'InProgress', createdAt: daysAgo(50), updatedAt: daysAgo(45) }),
+          makeDashboardBug({ id: 'bug-fine', title: 'Fine', severity: 'Medium', status: 'InProgress' }),
+        ],
+      }),
+    );
+  });
+
+  it('shows the dashboard with the toggle pressed when no bug is in the address', async () => {
+    search = new URLSearchParams();
+    renderWithProviders(<BugsScreen />);
+    expect(await screen.findByTestId('bug-dashboard')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Dashboard' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it("shows a linked bug's detail instead of the dashboard, and the toggle returns to it", async () => {
+    search = new URLSearchParams('bug=bug-linked');
+    renderWithProviders(<BugsScreen />);
+    expect(await screen.findByRole('heading', { name: 'Total is wrong' })).toBeTruthy();
+    expect(screen.queryByTestId('bug-dashboard')).toBeNull();
+    const toggle = screen.getByRole('button', { name: 'Dashboard' });
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+
+    fireEvent.click(toggle);
+    expect(replace).toHaveBeenCalledWith('/bugs');
+  });
+
+  it('lists idle and unattended bugs in Needs Attention, and a row opens its bug', async () => {
+    search = new URLSearchParams();
+    renderWithProviders(<BugsScreen />);
+    const table = await screen.findByRole('table', { name: 'Needs Attention' });
+    expect(screen.getByTestId('needs-attention-count').textContent).toBe('2');
+    const rows = within(table).getAllByTestId('needs-attention-row');
+    expect(rows.map((r) => r.textContent)).toEqual([
+      expect.stringContaining('Lockout counter resets after a page reload'),
+      expect.stringContaining('Footer link is stale'),
+    ]);
+    expect(within(rows[0]).getByText('Unattended')).toBeTruthy();
+    expect(within(rows[0]).queryByText('Idle')).toBeNull();
+    expect(within(rows[1]).getByText('Idle')).toBeTruthy();
+    expect(within(rows[1]).queryByText('Unattended')).toBeNull();
+
+    fireEvent.click(within(rows[0]).getByRole('button', { name: 'Lockout counter resets after a page reload' }));
+    expect(replace).toHaveBeenCalledWith('/bugs?bug=bug-lockout');
+  });
+
+  it('leaves Needs Attention out when no bug needs attention', async () => {
+    search = new URLSearchParams();
+    vi.mocked(getBugDashboard).mockResolvedValue(makeBugDashboard({ bugs: [makeDashboardBug({ status: 'InProgress', severity: 'High' })] }));
+    renderWithProviders(<BugsScreen />);
+    await screen.findByTestId('bug-dashboard');
+    expect(screen.queryByRole('table', { name: 'Needs Attention' })).toBeNull();
   });
 
   it('shows the bug named in ?bug=, and selecting another puts it in the URL', async () => {

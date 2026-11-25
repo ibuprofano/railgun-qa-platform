@@ -49,11 +49,11 @@ The seed SHALL add a Contributor and a Viewer teammate as project members, and a
 - **THEN** the seeded folders appear in the tree, and test cases that have a recorded outcome show it
 
 ### Requirement: The dataset has a believable history
-Seeded rows SHALL carry creation and update times spread over the three weeks before the seed runs, in an order that matches the lifecycle: created before started, started before completed. Each seeded change of a kind the app logs (folder creation, execution lifecycle steps, run outcomes, bug filing and updates) SHALL have an activity entry with the matching time and the acting teammate or user, written the way the app writes it.
+Seeded rows SHALL carry creation and update times spread over the three weeks before the seed runs, in an order that matches the lifecycle: created before started, started before completed. One seeded bug, and the tags it carries, SHALL be older, reported about six weeks before the seed runs (see "One seeded bug needs attention for being idle"). Each seeded change of a kind the app logs (folder creation, tag creation, execution lifecycle steps, run outcomes, bug filing and updates) SHALL have an activity entry with the matching time and the acting teammate or user, written the way the app writes it.
 
 #### Scenario: History spans weeks and people
 - **WHEN** the seeded project's activity entries are listed
-- **THEN** they span roughly the last three weeks and name more than one actor
+- **THEN** they span roughly the last three weeks, apart from the older bug and its tags, and name more than one actor
 
 ### Requirement: Seeding is additive, idempotent and all-or-nothing
 The seed SHALL never modify or remove rows that already exist in the project. Its folders and test cases SHALL be placed after the project's existing root items. Running it again for the same user SHALL add nothing. If any part fails, nothing from that run SHALL remain.
@@ -76,3 +76,57 @@ The seed SHALL write only into the target user's workspace, through the applicat
 #### Scenario: Other workspaces are untouched
 - **WHEN** a developer seeds one user's project
 - **THEN** no row in any other workspace is added or changed
+
+### Requirement: Seeded resolved bugs carry a resolution date
+Every seeded bug in Resolved, Closed or Won't Fix status SHALL carry a resolution date equal to the time of its seeded status change. Seeded bugs in Open or In Progress SHALL carry none.
+
+#### Scenario: A seeded resolved bug
+- **WHEN** the seeded user reads a seeded bug that was resolved 12 days ago
+- **THEN** its resolution date is 12 days ago, the time of its seeded status-change entry
+
+### Requirement: Seeded test cases carry edit times
+Every seeded test case SHALL carry a last change time: its seeded script edit time when it has one, else its creation time. A seeded test case without a seeded script edit SHALL carry no script edit time.
+
+#### Scenario: An unedited seeded test case
+- **WHEN** the seeded user reads a seeded test case created 18 days ago and never edited
+- **THEN** it reports a creation time and a last change time of 18 days ago, and no script edit time
+
+### Requirement: Some seeded test cases had their script edited after a completed run
+At least two seeded test cases SHALL have a script edit a few days after one of their runs completed and before any later run started. Each edit SHALL be logged as the app logs it, by a teammate, with the edit's time. Runs started before the edit, and bugs filed from them, SHALL keep the script as it was then; runs started after it SHALL keep the current script.
+
+#### Scenario: Trend Reset on the demo
+- **WHEN** the seeded user opens a seeded test case whose script was edited after its last completed run
+- **THEN** its detail shows the Trend Reset banner, and its script edit time and last change time are the time of the edit
+
+#### Scenario: The edit is in the history
+- **WHEN** the seeded user filters the Activity screen to Test Cases
+- **THEN** each seeded script edit appears as an update of that test case's script, at its seeded time, by the teammate who made it
+
+#### Scenario: Earlier runs keep the old script
+- **WHEN** the seeded user opens a run of an edited test case from an execution that started before the edit
+- **THEN** the run shows the script from before the edit, which differs from the test case's current script
+
+### Requirement: The seeded runs fill the failing and most-run rankings
+The seed SHALL give at least three Ready test cases 3 or more completed runs including a Fail, so Top Failing lists them on the Overview and the Test Cases dashboard. At least one failing test case SHALL keep fewer than 3 completed runs, so the unranked count shows too. The extra executions SHALL be signed off, without auto-created bugs.
+
+#### Scenario: Top Failing on the demo
+- **WHEN** the seeded user opens the Test Cases dashboard
+- **THEN** Top Failing lists "Account locks after five failed sign-ins" first, at 100% (3/3), and says that failing test cases with fewer than 3 completed runs aren't ranked yet
+
+### Requirement: One seeded bug needs attention for being idle
+The seed SHALL add one Open bug of Medium severity, reported about six weeks before the seed runs and never updated since, not filed from a run. On the Bugs dashboard it SHALL be listed in Needs Attention as Idle and counted as Old in Backlog Age.
+
+#### Scenario: The idle bug on the dashboard
+- **WHEN** the seeded user opens the Bugs dashboard
+- **THEN** Needs Attention lists the six-week-old bug with the Idle badge, and Backlog Age shows an Old part of 1
+
+### Requirement: Seeded bugs carry tags in uneven numbers
+The seed SHALL add project tags, each with a colour, and attach them to seeded bugs so that at least one tag is carried by three or more bugs and at least one by exactly one. The tags SHALL be created before the earliest bug that carries them. A bug's filing entry SHALL name the tags it was filed with, as the app writes it.
+
+#### Scenario: The tag cloud on the demo
+- **WHEN** the seeded user opens the Bugs dashboard
+- **THEN** Bugs by Tag shows several tags in different sizes
+
+#### Scenario: Tags on the bug list
+- **WHEN** the seeded user filters the bug list by a seeded tag
+- **THEN** only the seeded bugs carrying it are listed

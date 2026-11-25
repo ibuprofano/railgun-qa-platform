@@ -33,15 +33,31 @@ export interface ExecutionDetailProps {
   onDeleted: () => void;
   /** Try Again → Duplicate (ADR 0020): the screen opens the New Execution form from it. */
   onDuplicate?: (source: Execution) => void;
+  /** The open run, when the screen keeps it in the address (`?run=`); otherwise the detail keeps its own. */
+  selectedRunId?: string | null;
+  onSelectRun?: (runId: string | null) => void;
 }
 
-export function ExecutionDetail({ projectId, executionId, role, onDeleted, onDuplicate }: ExecutionDetailProps) {
+export function ExecutionDetail({
+  projectId,
+  executionId,
+  role,
+  onDeleted,
+  onDuplicate,
+  selectedRunId: controlledRunId,
+  onSelectRun,
+}: ExecutionDetailProps) {
   const apiClient = useApiClient();
   const queryClient = useQueryClient();
   const applyExecution = useApplyExecution(projectId);
   const liveConnected = useLiveConnected();
   const [outcomeFilter, setOutcomeFilter] = useState<OutcomeFilter>(null);
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [ownRunId, setOwnRunId] = useState<string | null>(null);
+  const selectedRunId = controlledRunId !== undefined ? controlledRunId : ownRunId;
+  const setSelectedRunId = (runId: string | null) => {
+    setOwnRunId(runId);
+    onSelectRun?.(runId);
+  };
   const [environmentOpen, setEnvironmentOpen] = useState(false);
   const [editing, setEditing] = useState(false);
 

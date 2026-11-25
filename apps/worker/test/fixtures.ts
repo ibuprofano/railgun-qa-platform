@@ -175,6 +175,22 @@ export function builder(pool: Pool, ws: WorkspaceFixture) {
       );
       return id;
     },
+    /** A Queued report, as POST …/reports leaves it (report-pipeline). */
+    async report(
+      requestedBy: string,
+      opts: { range?: number; tz?: string; expiresInDays?: number; kind?: string; options?: Record<string, unknown> } = {},
+    ): Promise<string> {
+      const id = randomUUID();
+      const options = opts.options ?? { tz: opts.tz ?? 'UTC', range: opts.range ?? 30 };
+      await run((c) =>
+        c.query(
+          `INSERT INTO report (id, workspace_id, project_id, requested_by, kind, options, expires_at)
+           VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(days => $7))`,
+          [id, ws.workspaceId, ws.projectId, requestedBy, opts.kind ?? 'bugs_dashboard', JSON.stringify(options), opts.expiresInDays ?? 7],
+        ),
+      );
+      return id;
+    },
     async tag(name: string, projectId = ws.projectId): Promise<string> {
       const id = randomUUID();
       await run((c) =>

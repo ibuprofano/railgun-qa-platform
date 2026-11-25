@@ -8,3 +8,9 @@ build/
 *.log
 .DS_Store
 *.tsbuildinfo
+
+# Report fonts, fetched by `npm run fonts -w apps/worker` (ADR 0027)
+apps/worker/fonts/
+
+# Personal editor settings
+.vscode/

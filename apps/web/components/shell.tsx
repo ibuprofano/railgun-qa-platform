@@ -3,7 +3,7 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Bug, ListChecks, PlayCircle, Settings } from 'lucide-react';
+import { Bug, History, LayoutDashboard, ListChecks, PlayCircle, Settings, Trash2 } from 'lucide-react';
 import { useSessionContext } from '../lib/session-context';
 import { UserMenu } from './user-menu';
 import { AccessDenied } from './access-denied';
@@ -28,13 +28,18 @@ import {
 } from '@/components/ui/sidebar';
 
 const NAV_LINKS = [
+  { href: '/overview', label: 'Overview', icon: LayoutDashboard },
   { href: '/test-cases', label: 'Test Cases', icon: ListChecks },
   { href: '/executions', label: 'Executions', icon: PlayCircle },
   { href: '/bugs', label: 'Bugs', icon: Bug },
+  { href: '/activity', label: 'Activity', icon: History },
 ];
 
-/** Shown only to Project Admins (PRD §6.7). */
-const ADMIN_NAV_LINKS = [{ href: '/settings', label: 'Project Settings', icon: Settings }];
+/** Shown only to Project Admins (PRD §6.7, §6.11). */
+const ADMIN_NAV_LINKS = [
+  { href: '/settings', label: 'Project Settings', icon: Settings },
+  { href: '/trash', label: 'Trash', icon: Trash2 },
+];
 
 export interface ShellProps {
   children: ReactNode;

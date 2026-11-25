@@ -4,7 +4,8 @@ import { TestCaseTree } from './test-cases/test-case-tree';
 import { TestCasesScreen } from './test-cases/test-cases-screen';
 import { ExecutionList } from './executions/execution-list';
 import { BugList } from './bugs/bug-list';
-import { listTestCases } from '../lib/test-cases-api';
+import { getTestCaseDashboard, listTestCases } from '../lib/test-cases-api';
+import { makeDashboard } from '../test/test-case-dashboard-fixtures';
 import { listExecutions } from '../lib/executions-api';
 import { listBugs } from '../lib/bugs-api';
 import { useSessionContext } from '../lib/session-context';
@@ -20,7 +21,11 @@ vi.mock('../lib/api-client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/api-client')>()),
   useApiClient: () => ({ request: vi.fn() }),
 }));
-vi.mock('../lib/test-cases-api', () => ({ listTestCases: vi.fn() }));
+vi.mock('../lib/test-cases-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/test-cases-api')>()),
+  listTestCases: vi.fn(),
+  getTestCaseDashboard: vi.fn(),
+}));
 vi.mock('../lib/folders-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/folders-api')>()),
   listFolders: vi.fn().mockResolvedValue([]),
@@ -63,16 +68,17 @@ describe.each([
 });
 
 describe('Test Cases screen', () => {
-  it('prompts to select a test case when none is selected', async () => {
+  it('shows the dashboard when nothing is selected (ADR 0025)', async () => {
     vi.mocked(useSessionContext).mockReturnValue({
       data: { workspaceId: 'w1', projectId: 'p1', projectName: 'Project', role: 'Viewer' },
       loading: false,
       error: null,
     } as ReturnType<typeof useSessionContext>);
     vi.mocked(listTestCases).mockResolvedValue([]);
+    vi.mocked(getTestCaseDashboard).mockResolvedValue(makeDashboard({ tiles: { total: 0, ready: 0, covered: 0, avgConfidencePct: null } }));
     renderWithProviders(<TestCasesScreen />);
 
-    expect(await screen.findByText('Select a test case to see its details.')).toBeTruthy();
+    expect(await screen.findByText('No test cases yet')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Test Cases' })).toBeTruthy();
   });
 });

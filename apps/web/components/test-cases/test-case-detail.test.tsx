@@ -164,4 +164,58 @@ describe('TestCaseDetail', () => {
     expect(await screen.findByText('smoke')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Edit tags' })).toBeNull();
   });
+
+  describe('health banners (specs/test-cases-screen)', () => {
+    const health = (flags: string[], extra: Record<string, unknown> = {}) => ({
+      flags,
+      trend: null,
+      lastCompletedAt: '2026-11-05T12:00:00.000Z',
+      asOf: '2026-11-25T12:00:00.000Z',
+      ...extra,
+    });
+    const renderDetail = () =>
+      renderWithProviders(
+        <TestCaseDetail projectId="p1" testCaseId="tc1" canEdit={false} canDelete={false} onUpdated={() => {}} onDeleted={() => {}} />,
+      );
+
+    it('reads a Degrading banner with both pass rates', async () => {
+      mockedGetTestCase.mockResolvedValue({
+        ...baseTestCase,
+        health: health(['Degrading'], { trend: { recentPassPct: 40, previousPassPct: 80 } }),
+      });
+      renderDetail();
+      expect(await screen.findByText('Its pass rate fell from 80% to 40% over its last 5 runs.')).toBeTruthy();
+    });
+
+    it('says an Orphan was never added to an execution', async () => {
+      mockedGetTestCase.mockResolvedValue({ ...baseTestCase, health: health(['Orphan'], { lastCompletedAt: null }) });
+      renderDetail();
+      expect(await screen.findByText('This test case has never been added to any execution.')).toBeTruthy();
+    });
+
+    it('names the days since a Dormant test case last ran', async () => {
+      mockedGetTestCase.mockResolvedValue({ ...baseTestCase, health: health(['Dormant']) });
+      renderDetail();
+      expect(await screen.findByText('Its last run was 20 days ago.')).toBeTruthy();
+    });
+
+    it('explains a Trend Reset', async () => {
+      mockedGetTestCase.mockResolvedValue({ ...baseTestCase, health: health(['TrendReset']) });
+      renderDetail();
+      expect(await screen.findByText(/The Gherkin script was edited recently/)).toBeTruthy();
+    });
+
+    it('shows no banner for a healthy test case, or for No Script alone', async () => {
+      mockedGetTestCase.mockResolvedValue({ ...baseTestCase, health: health([]) });
+      const { unmount } = renderDetail();
+      await screen.findByText('Login works');
+      expect(screen.queryByRole('list', { name: 'Health' })).toBeNull();
+      unmount();
+
+      mockedGetTestCase.mockResolvedValue({ ...baseTestCase, gherkinScript: null, sourceType: 'Manual', health: health(['NoScript']) });
+      renderDetail();
+      await screen.findByText('Login works');
+      expect(screen.queryByRole('list', { name: 'Health' })).toBeNull();
+    });
+  });
 });

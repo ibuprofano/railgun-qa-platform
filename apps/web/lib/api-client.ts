@@ -8,6 +8,14 @@ export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost
 
 export interface ApiClient {
   request<T>(path: string, init?: RequestInit): Promise<T>;
+  /** A file download (report-pipeline): the body as a Blob, with the name from Content-Disposition. */
+  requestBlob(path: string): Promise<{ blob: Blob; fileName: string | null }>;
+}
+
+/** The file name in a `Content-Disposition: attachment; filename="…"` header, if any. */
+export function fileNameFromDisposition(header: string | null): string | null {
+  const match = header?.match(/filename="([^"]+)"/i) ?? header?.match(/filename=([^;]+)/i);
+  return match ? match[1].trim() : null;
 }
 
 /**
@@ -49,8 +57,9 @@ export function useApiClient(): ApiClient {
   const { getToken } = useAuth();
   const router = useRouter();
 
-  const request = useCallback(
-    async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
+  /** Every request: the bearer token (ADR 0009), sign-in on 401, ApiError on any other failure. */
+  const send = useCallback(
+    async (path: string, init: RequestInit = {}): Promise<Response> => {
       const token = await getToken();
       const response = await fetch(`${API_BASE_URL}${path}`, {
         ...init,
@@ -70,15 +79,29 @@ export function useApiClient(): ApiClient {
         const body = await response.text();
         throw new ApiError(response.status, messageFromBody(body), path);
       }
-
-      if (response.status === 204) {
-        return undefined as T;
-      }
-
-      return (await response.json()) as T;
+      return response;
     },
     [getToken, router],
   );
 
-  return { request };
+  const request = useCallback(
+    async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
+      const response = await send(path, init);
+      if (response.status === 204) {
+        return undefined as T;
+      }
+      return (await response.json()) as T;
+    },
+    [send],
+  );
+
+  const requestBlob = useCallback(
+    async (path: string) => {
+      const response = await send(path);
+      return { blob: await response.blob(), fileName: fileNameFromDisposition(response.headers.get('Content-Disposition')) };
+    },
+    [send],
+  );
+
+  return { request, requestBlob };
 }

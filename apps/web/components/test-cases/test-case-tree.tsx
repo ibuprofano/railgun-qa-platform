@@ -15,7 +15,7 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core';
 import { SortableContext, sortableKeyboardCoordinates, type SortingStrategy } from '@dnd-kit/sortable';
-import { FilePlus2, FileText, Folder as FolderIcon, FolderPlus, ListChecks } from 'lucide-react';
+import { FilePlus2, FileText, Folder as FolderIcon, FolderPlus, LayoutDashboard, ListChecks } from 'lucide-react';
 import { useApiClient } from '../../lib/api-client';
 import { folderKeys, listFolders, moveFolder } from '../../lib/folders-api';
 import { listTestCases, moveTestCase, type TestCaseStatus } from '../../lib/test-cases-api';
@@ -64,6 +64,8 @@ export interface TestCaseTreeProps {
   canDelete: boolean;
   /** An action on an item (null = the root), handled by the screen's dialogs. */
   onAction: (action: TreeAction, node: TreeNode | null) => void;
+  /** The Dashboard toggle (ADR 0025): clears the selection; pressed while nothing is selected. */
+  onShowDashboard?: () => void;
 }
 
 /** Pointer zone within the row under the cursor (design.md: 25% / 50% / 25%). */
@@ -77,7 +79,7 @@ function zoneFor(pointerY: number, rect: { top: number; height: number }): DropZ
  * dots, name/status filter, remembered expansion, per-item actions menus, and drag and
  * drop (pointer + keyboard) through dnd-kit (ADR 0014).
  */
-export function TestCaseTree({ projectId, selected, onSelect, canCreate, canDelete, onAction }: TestCaseTreeProps) {
+export function TestCaseTree({ projectId, selected, onSelect, canCreate, canDelete, onAction, onShowDashboard }: TestCaseTreeProps) {
   const apiClient = useApiClient();
   const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -196,16 +198,29 @@ export function TestCaseTree({ projectId, selected, onSelect, canCreate, canDele
     <Card className="flex h-full flex-col">
       <CardHeader className="flex flex-row items-center justify-between gap-2">
         <CardTitle>Test Cases</CardTitle>
-        {canCreate && (
-          <div className="flex gap-1">
-            <Button type="button" size="sm" variant="outline" onClick={() => onAction('newFolder', null)}>
-              <FolderPlus /> New folder
+        <div className="flex flex-wrap justify-end gap-1">
+          {onShowDashboard && (
+            <Button
+              type="button"
+              size="sm"
+              variant={selected === null ? 'secondary' : 'ghost'}
+              aria-pressed={selected === null}
+              onClick={onShowDashboard}
+            >
+              <LayoutDashboard /> Dashboard
             </Button>
-            <Button type="button" size="sm" onClick={() => onAction('newTestCase', null)}>
-              <FilePlus2 /> New test case
-            </Button>
-          </div>
-        )}
+          )}
+          {canCreate && (
+            <>
+              <Button type="button" size="sm" variant="outline" onClick={() => onAction('newFolder', null)}>
+                <FolderPlus /> New folder
+              </Button>
+              <Button type="button" size="sm" onClick={() => onAction('newTestCase', null)}>
+                <FilePlus2 /> New test case
+              </Button>
+            </>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col gap-3">
         <div className="grid grid-cols-[1fr_9rem_7rem] gap-2">

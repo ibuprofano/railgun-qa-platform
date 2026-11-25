@@ -13,6 +13,7 @@ import { TestCaseTree, type TreeSelection } from './test-case-tree';
 import { TestCaseDetail } from './test-case-detail';
 import { CreateTestCaseDialog } from './create-test-case-dialog';
 import { FolderSummary } from './folder-summary';
+import { TestCaseDashboard } from './test-case-dashboard';
 import { Breadcrumb } from './breadcrumb';
 import { TreeDialogs, type TreeDialog } from './tree-dialogs';
 import { actionsFor, type TreeAction } from './tree-actions';
@@ -31,8 +32,8 @@ function initialSelection(params: URLSearchParams): TreeSelection | null {
 
 /**
  * The Test Cases screen (test-cases-screen): folder tree on the left; the selected
- * folder's summary, the selected test case (with its breadcrumb), or the create form on
- * the right; and the tree's dialogs. Each piece invalidates its own query keys.
+ * folder's summary, the selected test case (with its breadcrumb), or the dashboard when
+ * nothing is selected on the right; and the tree's dialogs. Each piece invalidates its own query keys.
  */
 export function TestCasesScreen() {
   const session = useSessionContext();
@@ -94,6 +95,10 @@ export function TestCasesScreen() {
           canCreate={permissions.canCreate}
           canDelete={permissions.canDelete}
           onAction={onAction}
+          onShowDashboard={() => {
+            setSelected(null);
+            setCreatingIn(undefined);
+          }}
         />
         <div className="min-h-0 overflow-y-auto">
           {selectedNode?.kind === 'folder' ? (
@@ -117,9 +122,10 @@ export function TestCasesScreen() {
                 onAddToExisting={permissions.canEdit ? setAdding : undefined}
               />
             </div>
-          ) : (
-            <p className="p-6 text-sm text-muted-foreground">Select a test case to see its details.</p>
-          )}
+          ) : selected === null ? (
+            // Nothing selected: the dashboard is the default right panel (ADR 0025 decision 4).
+            <TestCaseDashboard projectId={projectId} />
+          ) : null}
         </div>
       </div>
       <CreateTestCaseDialog

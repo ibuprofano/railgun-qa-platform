@@ -18,11 +18,15 @@ The purge SHALL permanently remove every project, folder, test case, execution a
 - **THEN** no row is removed
 
 ### Requirement: Purging a project removes everything in it
-Purging a project SHALL remove all of its folders, test cases, executions with their runs, bugs, tags, environments with their credentials, and project memberships. A user whose last active project it was SHALL fall back to another project.
+Purging a project SHALL remove all of its folders, test cases, executions with their runs, bugs, tags, environments with their credentials, project memberships, and Health Score snapshots. A user whose last active project it was SHALL fall back to another project.
 
 #### Scenario: A project 31 days in the trash
 - **WHEN** the purge runs 31 days after a project with test cases, an execution and a bug was deleted
 - **THEN** the project and all of its content no longer exist, while the workspace's other projects are unchanged
+
+#### Scenario: Snapshots go with their project
+- **WHEN** a project with Health Score snapshots is purged
+- **THEN** its snapshots no longer exist, and other projects' snapshots are unchanged
 
 ### Requirement: Purging keeps run history and bug records
 Purging a test case SHALL keep its runs and their attempt history inside their executions, with the name and script captured when the execution started, and SHALL clear the links to it from those runs, attempts and bugs. Purging an execution SHALL remove its runs and their attempt history and clear the links to them from bugs, and the bugs SHALL remain.

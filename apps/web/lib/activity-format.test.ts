@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { actorOf, DESCRIPTIONS, describeActivity, relativeTime } from './activity-format';
+import { actionKind, actorOf, dayLabel, DESCRIPTIONS, describeActivity, groupByDay, initialsOf, relativeTime } from './activity-format';
 import type { ActivityEntry } from './activity-api';
 
 /** Every action code the API and worker write today (grep of apps/api/src and apps/worker/src). */
@@ -15,6 +15,7 @@ const LOGGED_CODES = [
   'test_execution.returned_to_draft', 'test_execution.run_added', 'test_execution.run_removed',
   'test_execution.runs_reordered', 'test_execution.signed_off', 'test_execution.started', 'test_execution.updated',
   'test_execution.purged', 'test_run.outcome_set', 'workspace.renamed',
+  'test_case.restored', 'folder.restored', 'test_execution.restored', 'bug.restored',
 ];
 
 const entry = (overrides: Partial<ActivityEntry>): ActivityEntry => ({
@@ -45,8 +46,22 @@ describe('describeActivity', () => {
     [{ actionCode: 'test_execution.restarted', details: { attempt: 2, droppedRuns: 1 } }, 'restarted execution “Smoke” as attempt 2, dropping 1 run of deleted test cases'],
     [{ actionCode: 'test_execution.run_added', details: { testCaseName: 'Login' } }, 'added “Login” to execution “Smoke”'],
     [{ actionCode: 'environment.updated', entityName: 'Staging', details: { changes: { baseUrl: {} }, credentials: { added: ['guest'], changed: [], removed: ['buyer'] } } }, 'updated environment “Staging” (base URL; added guest; removed buyer)'],
+    [{ actionCode: 'test_case.restored', entityName: 'Pay' }, 'restored test case “Pay”'],
+    [{ actionCode: 'test_execution.restored' }, 'restored execution “Smoke”'],
+    [{ actionCode: 'bug.restored', entityName: 'Broken' }, 'restored bug “Broken”'],
+    [{ actionCode: 'folder.restored', entityName: 'Checkout', details: { folders: 1, testCases: 2 } }, 'restored folder “Checkout”'],
+    [
+      { actionCode: 'folder.restored', entityName: 'Checkout', details: { restoredWith: { type: 'test-case', id: 't1', name: 'Pay' } } },
+      'restored folder “Checkout” with test case “Pay”',
+    ],
   ])('%o reads "%s"', (overrides, sentence) => {
     expect(describeActivity(entry(overrides as Partial<ActivityEntry>))).toBe(sentence);
+  });
+
+  it('reads a report download (report-pipeline)', () => {
+    expect(describeActivity(entry({ actionCode: 'report.downloaded', entityType: 'report', entityName: 'Bugs dashboard report' }))).toBe(
+      'downloaded the Bugs dashboard report',
+    );
   });
 
   it('falls back to the code for an unknown action', () => {
@@ -70,5 +85,72 @@ describe('relativeTime', () => {
     ['2026-11-21T12:00:00.000Z', '2 days ago'],
   ])('%s is %s', (iso, expected) => {
     expect(relativeTime(iso, now)).toBe(expected);
+  });
+});
+
+describe('actionKind', () => {
+  it.each([
+    ['test_case.created', 'create'],
+    ['folder.restored', 'create'],
+    ['test_execution.run_added', 'create'],
+    ['bug.deleted', 'remove'],
+    ['bug.purged', 'remove'],
+    ['test_execution.run_removed', 'remove'],
+    ['bug.updated', 'change'],
+    ['test_run.outcome_set', 'change'],
+    ['environment_credential.revealed', 'change'],
+  ])('%s is a %s', (actionCode, kind) => {
+    expect(actionKind({ actionCode })).toBe(kind);
+  });
+});
+
+describe('initialsOf', () => {
+  it.each([
+    ['Ana', 'AN'],
+    ['Ana Ruiz', 'AR'],
+    ['ana maria ruiz', 'AR'],
+    ['  ', '?'],
+  ])('%s → %s', (name, expected) => {
+    expect(initialsOf(name)).toBe(expected);
+  });
+});
+
+describe('day grouping', () => {
+  // Local-time dates, so the labels don't depend on the machine's time zone.
+  const at = (y: number, m: number, d: number, h = 12) => new Date(y, m - 1, d, h);
+  const weekday = (date: Date) => date.toLocaleDateString(undefined, { weekday: 'long' });
+  const fullDate = (date: Date) => date.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+
+  it('labels days within a Thursday’s week by weekday, older ones by date', () => {
+    const thursday = at(2026, 11, 26, 15); // Thursday 26 Nov 2026
+    expect(dayLabel(at(2026, 11, 26, 1), thursday)).toBe('Today');
+    expect(dayLabel(at(2026, 11, 25, 23), thursday)).toBe('Yesterday');
+    expect(dayLabel(at(2026, 11, 23), thursday)).toBe(weekday(at(2026, 11, 23))); // Monday
+    expect(dayLabel(at(2026, 11, 22), thursday)).toBe(fullDate(at(2026, 11, 22))); // last Sunday
+    expect(dayLabel(at(2026, 11, 12), thursday)).toBe(fullDate(at(2026, 11, 12)));
+  });
+
+  it('on a Monday, anything before yesterday is a date', () => {
+    const monday = at(2026, 11, 23);
+    expect(dayLabel(at(2026, 11, 22), monday)).toBe('Yesterday');
+    expect(dayLabel(at(2026, 11, 21), monday)).toBe(fullDate(at(2026, 11, 21)));
+  });
+
+  it('on a Sunday, the whole week back to Monday gets weekday names', () => {
+    const sunday = at(2026, 11, 29);
+    expect(dayLabel(at(2026, 11, 23), sunday)).toBe(weekday(at(2026, 11, 23)));
+    expect(dayLabel(at(2026, 11, 22), sunday)).toBe(fullDate(at(2026, 11, 22)));
+  });
+
+  it('groups newest-first entries under consecutive headings, keeping order', () => {
+    const now = at(2026, 11, 26, 15);
+    const e = (id: string, date: Date) => entry({ id, createdAt: date.toISOString() });
+    const groups = groupByDay([e('1', at(2026, 11, 26, 14)), e('2', at(2026, 11, 26, 9)), e('3', at(2026, 11, 25)), e('4', at(2026, 11, 2))], now);
+
+    expect(groups.map((group) => [group.label, group.entries.map((x) => x.id)])).toEqual([
+      ['Today', ['1', '2']],
+      ['Yesterday', ['3']],
+      [fullDate(at(2026, 11, 2)), ['4']],
+    ]);
   });
 });

@@ -1,3 +1,4 @@
+import type { ExecutionDashboardData } from '@railgun-qa/reporting';
 import type { ApiClient } from './api-client';
 
 export type ExecutionStatus = 'Draft' | 'Ready' | 'InProgress' | 'Paused' | 'Completed' | 'Done' | 'Canceled';
@@ -95,6 +96,14 @@ export function listExecutions(client: ApiClient, projectId: string): Promise<Ex
   return client.request(base(projectId));
 }
 
+/**
+ * The Executions dashboard's rows (specs/execution-metrics): every live execution and its
+ * current runs, dated in `timeZone`. The browser scopes and counts them (design.md decision 1).
+ */
+export function getExecutionDashboard(client: ApiClient, projectId: string, timeZone: string): Promise<ExecutionDashboardData> {
+  return client.request(`${base(projectId)}/dashboard?tz=${encodeURIComponent(timeZone)}`);
+}
+
 export function getExecution(client: ApiClient, projectId: string, executionId: string): Promise<Execution> {
   return client.request(`${base(projectId)}/${executionId}`);
 }
@@ -181,6 +190,11 @@ export const attemptOf = (execution: Pick<Execution, 'attempt'>): number => exec
 
 /** Query keys mirror the REST paths (frontend-ui-stack convention). */
 export const executionKeys = {
+  /**
+   * Deliberately not under the list key: live events invalidate the list on every change,
+   * and the dashboard only needs fresh data when it is shown (design.md decision 5).
+   */
+  dashboard: (projectId: string, timeZone: string) => ['projects', projectId, 'executions-dashboard', timeZone] as const,
   list: (projectId: string) => ['projects', projectId, 'executions'] as const,
   detail: (projectId: string, executionId: string) => ['projects', projectId, 'executions', executionId] as const,
   /** Under the detail key, so refetching an execution (SSE, Restart) refreshes it too. */

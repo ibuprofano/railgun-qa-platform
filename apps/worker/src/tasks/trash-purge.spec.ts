@@ -1,10 +1,11 @@
 import { randomUUID } from 'crypto';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
+import { withTenantContext } from '../tenant-context';
 import { createWorkerPool } from '../db';
 import { runOnce } from 'graphile-worker';
 import { purgeTrash } from './trash-purge';
 import { createTaskList } from '.';
-import { addUser, builder, createAppPool, createWorkspace, setLastProject } from '../../test/fixtures';
+import { addUser, builder, createAppPool, createWorkspace, daysAgo, inWorkspace, setLastProject } from '../../test/fixtures';
 
 /**
  * Fixtures are written as railgun_app; the purge runs as railgun_worker. purgeTrash visits
@@ -23,6 +24,9 @@ describe('trash purge', () => {
     await app.end();
     await worker.end();
   });
+
+  const withWorkerTenant = <T>(workspaceId: string, fn: (client: PoolClient) => Promise<T>) =>
+    withTenantContext(worker, workspaceId, fn);
 
   async function setUp(label: string) {
     const ws = await createWorkspace(app, `${label}-${randomUUID().slice(0, 8)}`);
@@ -112,6 +116,26 @@ describe('trash purge', () => {
     expect(log.last).toMatchObject({ action_code: 'project.purged', entity_name: 'Old App' });
     // Contents went with the project: no entries of their own.
     expect(await b.count('activity_entries', 'entity_id = ANY($1::uuid[])', [tc, executionId, bug])).toBe(0);
+  });
+
+  it("removes a purged project's Health Score snapshots, leaving other projects' alone", async () => {
+    const { ws, b, purge } = await setUp('Purge-Snapshots');
+    const doomed = await b.project('Old App', 31);
+    // The app role can't write snapshots; the worker records them (ADR 0024).
+    await withWorkerTenant(ws.workspaceId, async (c) => {
+      for (const projectId of [doomed, ws.projectId]) {
+        await c.query(
+          `INSERT INTO health_snapshot (workspace_id, project_id, day, score, band, pass_rate, coverage, bug_pressure, freshness)
+           VALUES ($1, $2, '2026-11-20', 70, 'AtRisk', 70, 70, 70, 70)`,
+          [ws.workspaceId, projectId],
+        );
+      }
+    });
+
+    await purge();
+
+    expect(await b.count('health_snapshot', 'project_id = $1', doomed)).toBe(0);
+    expect(await b.count('health_snapshot', 'project_id = $1', ws.projectId)).toBe(1);
   });
 
   it('keeps the run and the bug when their test case is purged, clearing only the links', async () => {
@@ -269,5 +293,70 @@ describe('trash purge', () => {
       expect(await b.count('test_case', 'id = $1', old)).toBe(0);
       expect(await b.count('folder', 'id = $1', folder)).toBe(1);
     });
+
+    describe('after a restore (ADR 0022)', () => {
+      /** What the API's restore does to a folder delete: clears the deleted columns and deletion_id. */
+      async function restoreDeletion(workspaceId: string, deletionId: string) {
+        await inWorkspace(app, workspaceId, async (c) => {
+          await c.query('UPDATE folder SET deleted_at = NULL, deleted_by = NULL, deletion_id = NULL WHERE deletion_id = $1', [deletionId]);
+          await c.query('UPDATE test_case SET deleted_at = NULL, deleted_by = NULL, deletion_id = NULL WHERE deletion_id = $1', [deletionId]);
+        });
+      }
+
+      it('leaves a restored folder tree alone, however old its deletion was', async () => {
+        const { ws, b, purge } = await setUp('Purge-Restored');
+        const deletion = randomUUID();
+        const root = await b.folder('Checkout', { deleted: 31, deletionId: deletion });
+        const sub = await b.folder('Payments', { parentId: root, deleted: 31, deletionId: deletion });
+        const tc = await b.testCase('Pay', { folderId: sub, deleted: 31, deletionId: deletion });
+        await restoreDeletion(ws.workspaceId, deletion);
+
+        await purge();
+
+        expect(await b.count('folder', 'id = ANY($1::uuid[])', [root, sub])).toBe(2);
+        expect(await b.count('test_case', 'id = $1', tc)).toBe(1);
+        expect(await b.count('activity_entries', 'entity_id = ANY($1::uuid[])', [root, sub, tc])).toBe(0);
+      });
+
+      it('purges a restored test case deleted again on its own as an individual deletion', async () => {
+        const { ws, b, purge } = await setUp('Purge-Redeleted');
+        const deletion = randomUUID();
+        const folder = await b.folder('Checkout', { deleted: 40, deletionId: deletion });
+        const tc = await b.testCase('Pay', { folderId: folder, deleted: 40, deletionId: deletion });
+        await restoreDeletion(ws.workspaceId, deletion);
+        // Deleted again on its own (the API's test case delete leaves deletion_id NULL).
+        await inWorkspace(app, ws.workspaceId, (c) => c.query('UPDATE test_case SET deleted_at = $2 WHERE id = $1', [tc, daysAgo(31)]));
+
+        await purge();
+
+        expect(await b.count('test_case', 'id = $1', tc)).toBe(0);
+        expect(await b.count('folder', 'id = $1', folder)).toBe(1);
+        expect((await entriesFor(b, tc)).last).toMatchObject({ action_code: 'test_case.purged', entity_name: 'Pay' });
+      });
+    });
+  });
+
+  it('deletes expired reports with their files, keeps current ones, and keeps download entries (ADR 0027)', async () => {
+    const { ws, user, b, purge } = await setUp('Purge-Reports');
+    const expired = await b.report(user, { expiresInDays: -1 });
+    const current = await b.report(user);
+    await inWorkspace(app, ws.workspaceId, async (c) => {
+      await c.query(
+        `INSERT INTO activity_entries (workspace_id, project_id, actor_user_id, actor_display_name, action_code, entity_type, entity_id, entity_name, category)
+         VALUES ($1, $2, $3, 'Fixture User', 'report.downloaded', 'report', $4, 'Bugs dashboard report', 'Bugs')`,
+        [ws.workspaceId, ws.projectId, user, expired],
+      );
+    });
+    await withWorkerTenant(ws.workspaceId, (c) =>
+      c.query(`INSERT INTO report_file (report_id, workspace_id, content) VALUES ($1, $2, '\x25504446')`, [expired, ws.workspaceId]),
+    );
+
+    const summary = await purge();
+
+    expect(summary.expiredReports).toBe(1);
+    expect(await b.count('report', 'id = $1', expired)).toBe(0);
+    expect(await b.count('report_file', 'report_id = $1', expired)).toBe(0);
+    expect(await b.count('report', 'id = $1', current)).toBe(1);
+    expect(await b.count('activity_entries', 'entity_id = $1', expired)).toBe(1);
   });
 });

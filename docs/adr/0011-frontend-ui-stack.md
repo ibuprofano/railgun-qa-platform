@@ -1,6 +1,6 @@
 # ADR 0011: Frontend UI Stack
 
-**Status:** Accepted, amended by [ADR 0014](0014-drag-and-drop-and-ordering.md) (drag and drop and ordering keys)
+**Status:** Accepted, amended by [ADR 0014](0014-drag-and-drop-and-ordering.md) (drag and drop and ordering keys) and [ADR 0023](0023-chart-rendering.md) (charts: in-house SVG geometry, no chart library)
 **Date:** 2026-10-24
 **Amends:** [ADR 0001](0001-tech-stack.md) (adds the frontend UI layer below the framework choice, which ADR 0001 did not cover; partially resolves open question F6)
 

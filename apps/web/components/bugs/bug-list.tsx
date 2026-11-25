@@ -15,7 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Bug as BugIcon } from 'lucide-react';
+import { Bug as BugIcon, LayoutDashboard } from 'lucide-react';
 import { EmptyState, ErrorState, ListSkeleton } from '../states';
 
 /** Radix Select can't use '' as a value; this stands for "no filter". */
@@ -39,9 +39,21 @@ export interface BugListProps {
   /** Admins may delete tags from Manage tags. */
   canDeleteTags?: boolean;
   onCreateClick: () => void;
+  /** The Dashboard toggle: pressed while the dashboard is shown; shown only with `onShowDashboard`. */
+  dashboardShown?: boolean;
+  onShowDashboard?: () => void;
 }
 
-export function BugList({ projectId, selectedId, onSelect, canCreate, canDeleteTags = false, onCreateClick }: BugListProps) {
+export function BugList({
+  projectId,
+  selectedId,
+  onSelect,
+  canCreate,
+  canDeleteTags = false,
+  onCreateClick,
+  dashboardShown = false,
+  onShowDashboard,
+}: BugListProps) {
   const apiClient = useApiClient();
   const [sort, setSort] = useState<(typeof SORT_OPTIONS)[number]['value']>('updatedAt:desc');
   const [filters, setFilters] = useState<BugFilters>({});
@@ -71,11 +83,25 @@ export function BugList({ projectId, selectedId, onSelect, canCreate, canDeleteT
     <Card className="flex h-full flex-col">
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle>Bugs</CardTitle>
-        {canCreate && (
-          <Button type="button" size="sm" onClick={onCreateClick}>
-            New bug
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {onShowDashboard && (
+            <Button
+              type="button"
+              size="sm"
+              variant={dashboardShown ? 'secondary' : 'ghost'}
+              aria-pressed={dashboardShown}
+              onClick={onShowDashboard}
+            >
+              <LayoutDashboard className="size-4" />
+              Dashboard
+            </Button>
+          )}
+          {canCreate && (
+            <Button type="button" size="sm" onClick={onCreateClick}>
+              New bug
+            </Button>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col gap-3">
         <div className="grid grid-cols-2 gap-2">

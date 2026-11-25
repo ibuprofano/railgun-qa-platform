@@ -15,10 +15,8 @@ export interface Tag {
   bugCount: number;
 }
 
-/** ADR 0016 decision 7: an item matches a tag filter when it carries any picked tag; none picked = no filter. */
-export function carriesAnyTag(itemTagIds: readonly string[] | undefined, picked: readonly string[] | undefined): boolean {
-  return !picked || picked.length === 0 || (itemTagIds ?? []).some((id) => picked.includes(id));
-}
+/** ADR 0016 decision 7, shared with the dashboards' scope (packages/reporting). */
+export { carriesAnyTag } from '@railgun-qa/reporting';
 
 const base = (projectId: string) => `/projects/${projectId}/tags`;
 

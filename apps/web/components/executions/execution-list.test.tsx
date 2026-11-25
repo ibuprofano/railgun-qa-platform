@@ -97,6 +97,42 @@ describe('ExecutionList', () => {
     expect(screen.getByText('Draft one')).toBeTruthy();
   });
 
+  it('filtering by Canceled lists only Canceled executions', async () => {
+    mockedList.mockResolvedValue([
+      makeExecution({ id: 'a', name: 'Stopped one', status: 'Canceled' }),
+      makeExecution({ id: 'b', name: 'Done one', status: 'Done' }),
+    ]);
+    renderList(false);
+    await screen.findByText('Stopped one');
+
+    fireEvent.click(screen.getByLabelText('Filter by status'));
+    fireEvent.click(await screen.findByRole('option', { name: 'Canceled' }));
+
+    expect(screen.getByText('Stopped one')).toBeTruthy();
+    expect(screen.queryByText('Done one')).toBeNull();
+  });
+
+  it('reports filter changes to the screen when it keeps the filters', async () => {
+    mockedList.mockResolvedValue([makeExecution({ id: 'a', name: 'Smoke' })]);
+    const onFiltersChange = vi.fn();
+    renderWithProviders(
+      <ExecutionList
+        projectId="p1"
+        selectedId={null}
+        onSelect={() => {}}
+        canCreate={false}
+        onCreateClick={() => {}}
+        filters={{ status: 'Done' }}
+        onFiltersChange={onFiltersChange}
+      />,
+    );
+    await screen.findByLabelText('Filter by name');
+
+    fireEvent.change(screen.getByLabelText('Filter by name'), { target: { value: 'smo' } });
+
+    expect(onFiltersChange).toHaveBeenCalledWith({ status: 'Done', name: 'smo' });
+  });
+
   it('filtering by name is case-insensitive', async () => {
     mockedList.mockResolvedValue([makeExecution({ id: 'a', name: 'Smoke' }), makeExecution({ id: 'b', name: 'Regression' })]);
     renderList(false);

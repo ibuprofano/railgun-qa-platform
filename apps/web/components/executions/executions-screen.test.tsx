@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { ExecutionsScreen } from './executions-screen';
-import { createExecution, getExecution, listExecutions } from '../../lib/executions-api';
+import { createExecution, getExecution, getExecutionDashboard, listExecutions } from '../../lib/executions-api';
 import { useSessionContext } from '../../lib/session-context';
 import { renderWithProviders } from '../../test/render-with-providers';
-import { makeExecution, makeExecutionWithRuns, makeRun } from '../../test/execution-fixtures';
+import { makeDashboardData, makeExecution, makeExecutionWithRuns, makeRun } from '../../test/execution-fixtures';
 
 const replace = vi.fn();
 let search = new URLSearchParams();
@@ -24,6 +24,11 @@ vi.mock('../../lib/executions-api', async (importOriginal) => ({
   listExecutions: vi.fn(),
   getExecution: vi.fn(),
   createExecution: vi.fn(),
+  getExecutionDashboard: vi.fn(),
+}));
+vi.mock('../../lib/activity-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/activity-api')>()),
+  listProjectActivity: vi.fn(async () => ({ entries: [], nextCursor: null })),
 }));
 vi.mock('../../lib/test-cases-api', () => ({ listTestCases: vi.fn(async () => []) }));
 vi.mock('../../lib/folders-api', async (importOriginal) => ({
@@ -47,6 +52,7 @@ describe('ExecutionsScreen', () => {
     vi.mocked(getExecution).mockImplementation(async (_client, _projectId, id) =>
       makeExecutionWithRuns([makeRun({ testCaseName: `Run of ${id}` })], { id }),
     );
+    vi.mocked(getExecutionDashboard).mockReset().mockResolvedValue(makeDashboardData());
   });
 
   it('shows the execution named in ?execution=', async () => {
@@ -94,10 +100,70 @@ describe('ExecutionsScreen', () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/executions?execution=exec-new'));
   });
 
-  it('prompts to select when nothing is selected', async () => {
+  it('shows the dashboard when nothing is selected, with the Dashboard toggle pressed', async () => {
     search = new URLSearchParams();
     renderWithProviders(<ExecutionsScreen />);
 
-    expect(await screen.findByText('Select an execution to see its runs.')).toBeTruthy();
+    expect(await screen.findByTestId('execution-dashboard')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Dashboard' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByText('Select an execution to see its runs.')).toBeNull();
+  });
+
+  it('shows the linked execution, not the dashboard', async () => {
+    search = new URLSearchParams('execution=exec-2');
+    renderWithProviders(<ExecutionsScreen />);
+
+    expect(await screen.findByText('Run of exec-2')).toBeTruthy();
+    expect(screen.queryByTestId('execution-dashboard')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Dashboard' }).getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('the Dashboard toggle deselects the execution and drops its run', async () => {
+    search = new URLSearchParams('execution=exec-2&run=run-1');
+    renderWithProviders(<ExecutionsScreen />);
+    // The open run panel is modal, so the rest of the page is hidden from role queries.
+    await screen.findByRole('dialog');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dashboard', hidden: true }));
+
+    expect(replace).toHaveBeenCalledWith('/executions');
+  });
+
+  it('opens the run named in ?run=, and closing it removes the run from the address', async () => {
+    search = new URLSearchParams('execution=exec-2&run=run-1');
+    renderWithProviders(<ExecutionsScreen />);
+
+    const panel = await screen.findByRole('dialog');
+    fireEvent.keyDown(panel, { key: 'Escape' });
+
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/executions?execution=exec-2'));
+  });
+
+  it('leaves the panel closed for a run of another execution', async () => {
+    search = new URLSearchParams('execution=exec-2&run=not-a-run-here');
+    renderWithProviders(<ExecutionsScreen />);
+
+    await screen.findByText('Run of exec-2');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('the dashboard follows the list filters', async () => {
+    search = new URLSearchParams();
+    vi.mocked(getExecutionDashboard).mockResolvedValue(
+      makeDashboardData({
+        executions: [
+          { id: 'exec-1', name: 'First', status: 'Done', environmentName: 'Staging', browser: 'Chromium', tagIds: [], completedOn: null },
+          { id: 'exec-2', name: 'Second', status: 'Done', environmentName: 'Prod', browser: 'Chromium', tagIds: [], completedOn: null },
+        ],
+      }),
+    );
+    renderWithProviders(<ExecutionsScreen />);
+    const executions = await screen.findByRole('region', { name: 'Executions' });
+    expect(within(executions).getByText('2')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Filter by name'), { target: { value: 'first' } });
+
+    expect(within(screen.getByRole('region', { name: 'Executions' })).getByText('1')).toBeTruthy();
+    expect(screen.getByRole('note', { name: 'Dashboard scope' }).textContent).toContain('Name: first');
   });
 });

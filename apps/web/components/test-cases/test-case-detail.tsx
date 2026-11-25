@@ -18,6 +18,7 @@ import { GherkinView } from '../gherkin-view';
 import { tagKeys } from '../../lib/tags-api';
 import { TagsField } from '../tags/tags-field';
 import { notifySuccess } from '../../lib/notify';
+import { HealthBanners } from './health-banners';
 
 const STATUSES: TestCaseStatus[] = ['Draft', 'Ready', 'Deprecated'];
 
@@ -145,6 +146,7 @@ export function TestCaseDetail({
         )}
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        <HealthBanners health={testCase.health} />
         <div className="flex items-center justify-between gap-2">
           <span className="text-sm text-muted-foreground">{testCase.sourceType}</span>
           {onRun && testCase.status === 'Ready' && (

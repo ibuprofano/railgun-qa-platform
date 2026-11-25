@@ -14,7 +14,7 @@ import { AUTO_CREATED_SEVERITY, type BugSeverity, type BugStatus } from './bug-r
 const BUG_SELECT = Prisma.sql`
   SELECT b.id, b.title, b.severity, b.status, b.description, b.steps_to_reproduce,
          b.test_case_name_snapshot, b.gherkin_snapshot, b.failed_step_snapshot,
-         b.reporter_display_name, b.auto_created, b.created_at, b.updated_at, b.attempt,
+         b.reporter_display_name, b.auto_created, b.created_at, b.updated_at, b.resolved_at, b.attempt,
          b.test_run_id, r.position AS run_position, r.outcome AS run_outcome,
          e.id AS execution_id, e.name AS execution_name, (e.deleted_at IS NOT NULL) AS execution_deleted,
          b.test_case_id, (tc.deleted_at IS NOT NULL) AS test_case_deleted,
@@ -39,6 +39,7 @@ interface BugRow {
   auto_created: boolean;
   created_at: Date;
   updated_at: Date;
+  resolved_at: Date | null;
   attempt: number | null;
   test_run_id: string | null;
   run_position: number | null;
@@ -65,6 +66,8 @@ export interface BugResponse {
   autoCreated: boolean;
   createdAt: string;
   updatedAt: string;
+  /** When it entered Resolved, Closed or Won't Fix (PRD §2.9); null while unresolved. */
+  resolvedAt: string | null;
   /** The execution attempt the bug was found in (ADR 0020); null if never tied to a run. */
   attempt: number | null;
   run: {
@@ -96,6 +99,7 @@ function toResponse(row: BugRow): BugResponse {
     autoCreated: row.auto_created,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
+    resolvedAt: row.resolved_at?.toISOString() ?? null,
     attempt: row.attempt,
     run:
       row.test_run_id && row.execution_id

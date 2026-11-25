@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { useApiClient } from '../../lib/api-client';
 import { listTestCases } from '../../lib/test-cases-api';
 import { listEnvironments } from '../../lib/environments-api';
+import { environmentKeys } from '../../lib/environment-keys';
 import {
   createExecution,
   updateExecution,
@@ -159,7 +160,7 @@ export function ExecutionFormDialog({
     enabled: open,
   });
   const { data: environments = [] } = useQuery({
-    queryKey: ['projects', projectId, 'environments'],
+    queryKey: environmentKeys.list(projectId),
     queryFn: () => listEnvironments(apiClient, projectId),
     enabled: open,
   });

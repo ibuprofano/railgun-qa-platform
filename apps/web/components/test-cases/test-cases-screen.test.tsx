@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { TestCasesScreen } from './test-cases-screen';
-import { getTestCase, listTestCases } from '../../lib/test-cases-api';
+import { getTestCase, getTestCaseDashboard, listTestCases } from '../../lib/test-cases-api';
+import { makeDashboard } from '../../test/test-case-dashboard-fixtures';
 import { addRun, createExecution, getExecution, listExecutions } from '../../lib/executions-api';
 import { listEnvironments } from '../../lib/environments-api';
 import { useSessionContext } from '../../lib/session-context';
@@ -21,12 +22,14 @@ vi.mock('../../lib/api-client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api-client')>()),
   useApiClient: () => ({ request: vi.fn() }),
 }));
-vi.mock('../../lib/test-cases-api', () => ({
+vi.mock('../../lib/test-cases-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/test-cases-api')>()),
   listTestCases: vi.fn(),
   getTestCase: vi.fn(),
   updateTestCase: vi.fn(),
   deleteTestCase: vi.fn(),
   createTestCase: vi.fn(),
+  getTestCaseDashboard: vi.fn(),
 }));
 vi.mock('../../lib/executions-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/executions-api')>()),
@@ -73,6 +76,7 @@ describe('Run from a test case', () => {
       [ready, draft, deprecated].find((testCase) => testCase.id === id)!,
     );
     vi.mocked(listEnvironments).mockResolvedValue([]);
+    vi.mocked(getTestCaseDashboard).mockReset().mockResolvedValue(makeDashboard());
   });
 
   it('a Contributor runs a Ready test case and lands on the new execution', async () => {
@@ -176,5 +180,59 @@ describe('Run from a test case', () => {
     // Tree row + detail both show the name once the detail has loaded.
     await screen.findByText('Manual');
     expect(screen.getAllByText('Obsolete').length).toBeGreaterThan(1);
+  });
+});
+
+describe('the dashboard as the default right panel (ADR 0025)', () => {
+  const folder = { id: 'f-checkout', name: 'Checkout', parentFolderId: null, positionKey: 'a0' };
+
+  beforeEach(async () => {
+    search = new URLSearchParams();
+    vi.mocked(listTestCases).mockResolvedValue([ready, { ...draft, folderId: 'f-checkout' }]);
+    vi.mocked(getTestCase).mockImplementation(async (_client, _projectId, id) => [ready, draft].find((t) => t.id === id)!);
+    vi.mocked(getTestCaseDashboard).mockReset().mockResolvedValue(makeDashboard());
+    const { listFolders } = await import('../../lib/folders-api');
+    vi.mocked(listFolders).mockResolvedValue([folder] as never);
+  });
+
+  it('opens on the dashboard, with the Dashboard toggle pressed', async () => {
+    asRole('Viewer');
+    renderWithProviders(<TestCasesScreen />);
+
+    expect(await screen.findByRole('region', { name: 'Total Tests' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Dashboard' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('the toggle returns from a test case detail to the dashboard', async () => {
+    asRole('Viewer');
+    renderWithProviders(<TestCasesScreen />);
+    await openTestCase('Login works');
+    expect(screen.getByRole('button', { name: 'Dashboard' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.queryByRole('region', { name: 'Total Tests' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dashboard' }));
+
+    expect(await screen.findByRole('region', { name: 'Total Tests' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Dashboard' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('?testCase=<id> shows the detail, not the dashboard', async () => {
+    asRole('Viewer');
+    search = new URLSearchParams('testCase=tc-ready');
+    renderWithProviders(<TestCasesScreen />);
+
+    await screen.findByText('Manual');
+    expect(screen.queryByRole('region', { name: 'Total Tests' })).toBeNull();
+    expect(getTestCaseDashboard).not.toHaveBeenCalled();
+  });
+
+  it('selecting a folder still shows its summary', async () => {
+    asRole('Viewer');
+    renderWithProviders(<TestCasesScreen />);
+
+    fireEvent.click(await screen.findByText('Checkout'));
+
+    expect(await screen.findByText(/subfolder/i)).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Total Tests' })).toBeNull();
   });
 });

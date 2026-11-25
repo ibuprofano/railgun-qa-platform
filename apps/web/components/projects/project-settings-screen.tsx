@@ -8,11 +8,12 @@ import { notifySuccess } from '../../lib/notify';
 import { AccessDenied } from '../access-denied';
 import { InlineNameField } from '../inline-name-field';
 import { PageHeader } from '../page-header';
+import { EnvironmentsSection } from './environments-section';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 /**
- * Project Settings (PRD §6.7), Project Admins only. This change covers General: the
- * name, saved on confirm, and the slug, read-only since it never changes.
+ * Project Settings (PRD §6.7), Project Admins only: General (the name, saved on confirm,
+ * and the slug, read-only since it never changes) and Environments.
  */
 export function ProjectSettingsScreen() {
   const session = useSessionContext();
@@ -39,21 +40,24 @@ export function ProjectSettingsScreen() {
   return (
     <>
       <PageHeader title="Project Settings" description="Configuration for this project." />
-      <Card className="max-w-2xl">
-        <CardHeader>
-          <CardTitle>General</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <InlineNameField key={projectName} id="project-name" label="Project name" value={projectName} onSave={rename} />
-          <div className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium">Slug</span>
-            <code className="w-fit rounded bg-muted px-2 py-1 text-sm" aria-label="Project slug">
-              {projectSlug}
-            </code>
-            <p className="text-xs text-muted-foreground">Set when the project was created; it never changes.</p>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="flex flex-col gap-6">
+        <Card className="max-w-2xl">
+          <CardHeader>
+            <CardTitle>General</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <InlineNameField key={projectName} id="project-name" label="Project name" value={projectName} onSave={rename} />
+            <div className="flex flex-col gap-1.5">
+              <span className="text-sm font-medium">Slug</span>
+              <code className="w-fit rounded bg-muted px-2 py-1 text-sm" aria-label="Project slug">
+                {projectSlug}
+              </code>
+              <p className="text-xs text-muted-foreground">Set when the project was created; it never changes.</p>
+            </div>
+          </CardContent>
+        </Card>
+        <EnvironmentsSection projectId={projectId} />
+      </div>
     </>
   );
 }

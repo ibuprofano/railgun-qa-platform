@@ -1,3 +1,4 @@
+import type { DashboardExecution, DashboardRun, ExecutionDashboardData } from '@railgun-qa/reporting';
 import type { Execution, Run } from '../lib/executions-api';
 
 /** A complete Execution with sensible defaults, overridable per test. */
@@ -57,4 +58,43 @@ export function makeExecutionWithRuns(runs: Run[], overrides: Partial<Execution>
     },
     ...overrides,
   });
+}
+
+/** Executions dashboard rows (specs/execution-metrics), for the dashboard view's tests. */
+export function makeDashboardExecution(overrides: Partial<DashboardExecution> = {}): DashboardExecution {
+  return {
+    id: 'exec-1',
+    name: 'Smoke',
+    status: 'Done',
+    environmentName: 'Staging',
+    browser: 'Chromium',
+    tagIds: [],
+    completedOn: null,
+    ...overrides,
+  };
+}
+
+let dashboardRunSeq = 0;
+export function makeDashboardRun(overrides: Partial<DashboardRun> = {}): DashboardRun {
+  dashboardRunSeq += 1;
+  return {
+    id: `drun-${dashboardRunSeq}`,
+    executionId: 'exec-1',
+    executionName: 'Smoke',
+    position: dashboardRunSeq,
+    testCaseId: `tc-${dashboardRunSeq}`,
+    testCaseName: `Case ${dashboardRunSeq}`,
+    outcome: 'Pending',
+    completedOn: null,
+    attempts: 1,
+    bugCount: 0,
+    failedStep: null,
+    createdAt: '2026-11-01T10:00:00.000Z',
+    outcomeUpdatedAt: null,
+    ...overrides,
+  };
+}
+
+export function makeDashboardData(overrides: Partial<ExecutionDashboardData> = {}): ExecutionDashboardData {
+  return { today: '2026-11-24', executions: [makeDashboardExecution()], runs: [], ...overrides };
 }

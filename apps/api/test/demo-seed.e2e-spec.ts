@@ -10,6 +10,8 @@ import { provisionIdentity } from '../src/common/provision-identity';
 import { decrypt } from '../src/common/secrets-encryption';
 import { PrismaService } from '../src/common/prisma.service';
 import { SeedConflictError, SeedTargetError, seedDemo, seedUuid } from '../src/seed/demo-seed';
+import { BUGS, TAGS, TEAMMATES, TEST_CASES } from '../src/seed/demo-dataset';
+import { backlogAgeSplit, bugTagCounts, needsAttention, type BugDashboardData } from '@railgun-qa/reporting';
 
 jest.mock('@clerk/backend', () => ({
   verifyToken: jest.fn(async (token: string) => ({ sub: token })),
@@ -57,7 +59,7 @@ describe('demo seed (e2e, specs/demo-seed)', () => {
   async function countRows(workspaceId: string): Promise<Record<string, number>> {
     return withTenantContext(prisma, workspaceId, async (tx) => {
       const counts: Record<string, number> = {};
-      for (const table of ['folder', 'test_case', 'environment', 'environment_credential', 'test_execution', 'test_run', 'bug', 'activity_entries', 'project_membership']) {
+      for (const table of ['folder', 'tag', 'bug_tag', 'test_case', 'environment', 'environment_credential', 'test_execution', 'test_run', 'bug', 'activity_entries', 'project_membership']) {
         const [row] = await tx.$queryRawUnsafe<{ n: bigint }[]>(`SELECT COUNT(*) AS n FROM ${table}`);
         counts[table] = Number(row.n);
       }
@@ -90,7 +92,7 @@ describe('demo seed (e2e, specs/demo-seed)', () => {
 
       const result = await seedDemo(service, user.clerkUserId);
       expect(result.status).toBe('seeded');
-      expect(result.counts).toMatchObject({ teammates: 2, executions: 6, environments: 2, credentials: 3 });
+      expect(result.counts).toMatchObject({ teammates: 2, executions: 8, environments: 2, credentials: 3 });
       expect(result.counts!.testCases).toBeGreaterThanOrEqual(25);
       firstRunCounts = await countRows(user.workspaceId);
     });
@@ -99,7 +101,7 @@ describe('demo seed (e2e, specs/demo-seed)', () => {
       const list = await get(user.clerkUserId, `/projects/${user.projectId}/executions`);
       expect(list.status).toBe(200);
       const seeded = (list.body as { status: string; id: string; counts: Record<string, number> }[]);
-      expect(seeded.map((e) => e.status).sort()).toEqual(['Completed', 'Done', 'Draft', 'InProgress', 'Paused', 'Ready']);
+      expect([...new Set(seeded.map((e) => e.status))].sort()).toEqual(['Completed', 'Done', 'Draft', 'InProgress', 'Paused', 'Ready']);
 
       for (const summary of seeded) {
         const detail = await get(user.clerkUserId, `/projects/${user.projectId}/executions/${summary.id}`);
@@ -148,6 +150,27 @@ describe('demo seed (e2e, specs/demo-seed)', () => {
       expect(new Set(bugs.map((b) => b.status)).size).toBeGreaterThanOrEqual(4);
     });
 
+    it('resolved bugs carry a resolution date at their seeded status change; open ones none', async () => {
+      const bugs = (await get(user.clerkUserId, `/projects/${user.projectId}/bugs`)).body as {
+        id: string;
+        status: string;
+        resolvedAt: string | null;
+      }[];
+      const changes = await withTenantContext(service, user.workspaceId, (tx) =>
+        tx.$queryRaw<{ entity_id: string; created_at: Date }[]>`
+          SELECT entity_id, created_at FROM activity_entries
+          WHERE project_id = ${user.projectId}::uuid AND action_code = 'bug.updated'`,
+      );
+      const changedAt = new Map(changes.map((c) => [c.entity_id, c.created_at.toISOString()]));
+      const resolved = bugs.filter((b) => ['Resolved', 'Closed', 'WontFix'].includes(b.status));
+
+      expect(resolved.length).toBeGreaterThan(0);
+      for (const bug of resolved) {
+        expect(bug.resolvedAt).toBe(changedAt.get(bug.id));
+      }
+      expect(bugs.filter((b) => !resolved.includes(b)).every((b) => b.resolvedAt === null)).toBe(true);
+    });
+
     it('seeded credentials decrypt with the workspace key', async () => {
       const rows = await withTenantContext(prisma, user.workspaceId, (tx) =>
         tx.$queryRaw<{ id: string; password_ciphertext: string }[]>`SELECT id, password_ciphertext FROM environment_credential`,
@@ -172,6 +195,112 @@ describe('demo seed (e2e, specs/demo-seed)', () => {
           SELECT id, name FROM folder WHERE parent_folder_id IS NULL ORDER BY position_key, id`,
       );
       expect(roots.map((f) => f.name)).toEqual(['Existing', 'ShopFlow']);
+    });
+
+    it('test cases carry edit times: the script edit, else creation (ADR 0025)', async () => {
+      const cases = (await get(user.clerkUserId, `/projects/${user.projectId}/test-cases`)).body as {
+        name: string;
+        createdAt: string;
+        updatedAt: string;
+        scriptUpdatedAt: string | null;
+      }[];
+      const daysAgo = (iso: string) => Math.round((Date.now() - Date.parse(iso)) / DAY_MS);
+      for (const t of TEST_CASES) {
+        const row = cases.find((c) => c.name === t.name)!;
+        expect(daysAgo(row.createdAt)).toBe(Math.round(t.createdDaysAgo));
+        if (t.scriptEdit) {
+          expect(daysAgo(row.scriptUpdatedAt!)).toBe(t.scriptEdit.daysAgo);
+          expect(row.updatedAt).toBe(row.scriptUpdatedAt);
+        } else {
+          expect(row.updatedAt).toBe(row.createdAt);
+          expect(row.scriptUpdatedAt).toBeNull();
+        }
+      }
+    });
+
+    it('seeded script edits are in the Test Cases history, and earlier runs and bugs keep the old script', async () => {
+      const editedCases = TEST_CASES.filter((t) => t.scriptEdit);
+      const feed = (await get(user.clerkUserId, `/projects/${user.projectId}/activity?type=test-cases`)).body as {
+        entries: { actorName: string; actionCode: string; entityName: string; details: Record<string, unknown>; createdAt: string }[];
+      };
+      for (const t of editedCases) {
+        const entry = feed.entries.find((e) => e.actionCode === 'test_case.updated' && e.entityName === t.name);
+        expect(entry).toBeDefined();
+        expect(entry!.details).toEqual({ changes: { gherkinScript: true } });
+        expect(Math.round((Date.now() - Date.parse(entry!.createdAt)) / DAY_MS)).toBe(t.scriptEdit!.daysAgo);
+        expect(entry!.actorName).toBe(
+          t.scriptEdit!.by === 'owner' ? 'Seed Owner' : TEAMMATES.find((m) => m.key === 'contributor')!.displayName,
+        );
+      }
+
+      const list = (await get(user.clerkUserId, `/projects/${user.projectId}/executions`)).body as { id: string; name: string }[];
+      const smoke = (await get(user.clerkUserId, `/projects/${user.projectId}/executions/${list.find((e) => e.name === 'Payments smoke')!.id}`))
+        .body as { runs: { testCaseId: string; gherkinScript: string | null }[] };
+      for (const t of editedCases) {
+        const run = smoke.runs.find((r) => r.testCaseId === seedUuid(`${user.workspaceId}:test_case:${t.key}`));
+        expect(run?.gherkinScript).toBe(t.scriptEdit!.previousGherkin);
+      }
+
+      const bugs = (await get(user.clerkUserId, `/projects/${user.projectId}/bugs`)).body as { id: string; title: string }[];
+      const threeDs = bugs.find((b) => b.title === 'Pay with a card requiring 3-D Secure')!;
+      const bug = (await get(user.clerkUserId, `/projects/${user.projectId}/bugs/${threeDs.id}`)).body as { gherkinSnapshot: string };
+      expect(bug.gherkinSnapshot).toBe(TEST_CASES.find((t) => t.key === 'card-3ds')!.scriptEdit!.previousGherkin);
+    });
+
+    it('the seeded runs fill Top Failing on the dashboard and the Overview, leaving 2 unranked (design.md decision 7)', async () => {
+      const dashboard = (await get(user.clerkUserId, `/projects/${user.projectId}/test-cases/dashboard?tz=UTC`)).body;
+      const expected = [
+        ['Account locks after five failed sign-ins', 100],
+        ['Search with no results suggests alternatives', 67],
+        ['Reset password by email link', 33],
+      ];
+      expect(dashboard.rankings.topFailing.map((r: { name: string; failRatePct: number }) => [r.name, r.failRatePct])).toEqual(expected);
+      expect(dashboard.rankings.failingBelowMinimum).toBe(2);
+
+      const overview = (await get(user.clerkUserId, `/projects/${user.projectId}/overview`)).body;
+      expect(overview.topFailingTests.map((r: { name: string; failRatePct: number }) => [r.name, r.failRatePct])).toEqual(expected);
+      expect(overview.failingBelowMinimum).toBe(2);
+    });
+
+    it('the seeded script edits show Trend Reset on their test cases (specs/demo-seed)', async () => {
+      for (const t of TEST_CASES.filter((c) => c.scriptEdit)) {
+        const id = seedUuid(`${user.workspaceId}:test_case:${t.key}`);
+        const detail = (await get(user.clerkUserId, `/projects/${user.projectId}/test-cases/${id}`)).body as { health: { flags: string[] } };
+        expect(detail.health.flags).toContain('TrendReset');
+      }
+    });
+
+    it('the Bugs dashboard shows the idle bug in Needs Attention and Backlog Age, and tags in uneven numbers', async () => {
+      const response = await get(user.clerkUserId, `/projects/${user.projectId}/bugs/dashboard?tz=UTC`);
+      expect(response.status).toBe(200);
+      const data = response.body as BugDashboardData;
+      const idleId = seedUuid(`${user.workspaceId}:bug:order-email-currency`);
+
+      const idle = needsAttention(data).find((row) => row.bug.id === idleId);
+      expect(idle).toMatchObject({ idle: true, unattended: false });
+      expect(backlogAgeSplit(data).Old).toBe(1);
+
+      const counts = bugTagCounts(data).map((t) => t.count);
+      expect(counts).toHaveLength(TAGS.length);
+      expect(Math.max(...counts)).toBeGreaterThanOrEqual(3);
+      expect(counts).toContain(1);
+    });
+
+    it('filtering the bug list by a seeded tag returns exactly the bugs carrying it', async () => {
+      const list = (await get(user.clerkUserId, `/projects/${user.projectId}/bugs`)).body as { id: string; tagIds: string[] }[];
+      const authId = seedUuid(`${user.workspaceId}:tag:auth`);
+      const expected = BUGS.filter((b) => b.tagKeys?.includes('auth')).map((b) => seedUuid(`${user.workspaceId}:bug:${b.key}`));
+      expect(list.filter((b) => b.tagIds.includes(authId)).map((b) => b.id).sort()).toEqual(expected.sort());
+    });
+
+    it("logs tag creation, and names the tags in each tagged bug's filing entry", async () => {
+      const entries = await withTenantContext(prisma, user.workspaceId, (tx) =>
+        tx.$queryRaw<{ action_code: string; entity_id: string; details: { tags?: string[] } | null }[]>`
+          SELECT action_code, entity_id, details FROM activity_entries WHERE action_code IN ('tag.created', 'bug.created')`,
+      );
+      expect(entries.filter((e) => e.action_code === 'tag.created')).toHaveLength(TAGS.length);
+      const filing = entries.find((e) => e.entity_id === seedUuid(`${user.workspaceId}:bug:three-ds-auto`))!;
+      expect(filing.details?.tags?.sort()).toEqual(['checkout', 'payments']);
     });
 
     it('history spans weeks and more than one person', async () => {
@@ -211,6 +340,18 @@ describe('demo seed (e2e, specs/demo-seed)', () => {
       return tx.$queryRaw<{ id: string }[]>`SELECT id FROM "user" WHERE id = ${teammateId}::uuid`;
     });
     expect(teammate).toEqual([]);
+  });
+
+  it('a clashing tag name aborts and writes nothing', async () => {
+    const user = await signedInUser('tag-clash');
+    await withTenantContext(prisma, user.workspaceId, (tx) =>
+      tx.$executeRaw`INSERT INTO tag (id, project_id, workspace_id, name, color)
+        VALUES (${randomUUID()}::uuid, ${user.projectId}::uuid, ${user.workspaceId}::uuid, 'Checkout', 'gray')`,
+    );
+    const before = await countRows(user.workspaceId);
+
+    await expect(seedDemo(service, user.clerkUserId)).rejects.toThrow(SeedConflictError);
+    expect(await countRows(user.workspaceId)).toEqual(before);
   });
 
   it('a Clerk id that never signed in is refused', async () => {

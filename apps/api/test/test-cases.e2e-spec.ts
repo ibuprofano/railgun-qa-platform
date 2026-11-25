@@ -601,3 +601,130 @@ describe('test cases: tags and activity (e2e, ADR 0015/0016)', () => {
     ]);
   });
 });
+
+describe('test cases: edit times (e2e, ADR 0025)', () => {
+  let app: INestApplication;
+  let prisma: PrismaClient;
+
+  beforeAll(async () => {
+    prisma = createTestPrismaClient();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    app = moduleRef.createNestApplication();
+    await app.init();
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await prisma.$disconnect();
+  });
+
+  const api = () => request(app.getHttpServer());
+
+  async function setUp(label: string) {
+    const fixture = await createWorkspaceWithProject(prisma, `${label}-${randomUUID().slice(0, 8)}`);
+    const contributor = await setUpContributor(prisma, fixture.workspaceId, fixture.projectId);
+    const admin = await setUpAdmin(prisma, fixture.workspaceId, fixture.projectId);
+    const base = `/projects/${fixture.projectId}`;
+    const as = (token: string) => ({ Authorization: `Bearer ${token}` });
+    const create = async (body: Record<string, unknown>) =>
+      (await api().post(`${base}/test-cases`).set(as(contributor)).send(body)).body as Record<string, string | null>;
+    const patch = async (id: string, body: Record<string, unknown>) =>
+      (await api().patch(`${base}/test-cases/${id}`).set(as(contributor)).send(body)).body as Record<string, string | null>;
+    const detail = async (id: string) =>
+      (await api().get(`${base}/test-cases/${id}`).set(as(contributor))).body as Record<string, string | null>;
+    // Moves a test case's times into the past, so a later write's now() is visibly later.
+    const backdate = (id: string) =>
+      withTenantContext(prisma, fixture.workspaceId, (tx) => tx.$executeRaw`
+        UPDATE test_case SET created_at = created_at - interval '2 days', updated_at = updated_at - interval '2 days',
+          script_updated_at = script_updated_at - interval '2 days'
+        WHERE id = ${id}::uuid`);
+    return { fixture, contributor, admin, base, as, create, patch, detail, backdate };
+  }
+
+  it('a new test case reports equal creation and change times and no script edit time', async () => {
+    const s = await setUp('TC-Times-New');
+    const created = await s.create({ name: 'Fresh', gherkinScript: 'Given a thing' });
+
+    expect(created.createdAt).toEqual(expect.any(String));
+    expect(created.updatedAt).toBe(created.createdAt);
+    expect(created.scriptUpdatedAt).toBeNull();
+  });
+
+  it('a tags-only change sets the change time but not the script edit time', async () => {
+    const s = await setUp('TC-Times-Tags');
+    const created = await s.create({ name: 'Tagged' });
+    await s.backdate(created.id!);
+    const tag = (await api().post(`${s.base}/tags`).set(s.as(s.contributor)).send({ name: 'smoke' })).body.id;
+
+    const before = await s.detail(created.id!);
+    const updated = await s.patch(created.id!, { tagIds: [tag] });
+
+    expect(Date.parse(updated.updatedAt!)).toBeGreaterThan(Date.parse(before.updatedAt!));
+    expect(updated.createdAt).toBe(before.createdAt);
+    expect(updated.scriptUpdatedAt).toBeNull();
+  });
+
+  it('a move sets the change time', async () => {
+    const s = await setUp('TC-Times-Move');
+    const folder = (await api().post(`${s.base}/folders`).set(s.as(s.contributor)).send({ name: 'Target' })).body.id;
+    const created = await s.create({ name: 'Mover' });
+    await s.backdate(created.id!);
+    const before = await s.detail(created.id!);
+
+    const moved = await api().post(`${s.base}/test-cases/${created.id}/move`).set(s.as(s.contributor)).send({ folderId: folder });
+
+    expect(moved.status).toBe(200);
+    expect(Date.parse(moved.body.updatedAt)).toBeGreaterThan(Date.parse(before.updatedAt!));
+  });
+
+  it('an update that changes nothing leaves both times', async () => {
+    const s = await setUp('TC-Times-Noop');
+    const created = await s.create({ name: 'Same', gherkinScript: 'Given same' });
+    await s.backdate(created.id!);
+    const before = await s.detail(created.id!);
+
+    const updated = await s.patch(created.id!, { name: 'Same', gherkinScript: 'Given same' });
+
+    expect(updated.updatedAt).toBe(before.updatedAt);
+    expect(updated.scriptUpdatedAt).toBeNull();
+  });
+
+  it('a status change leaves the script edit time null', async () => {
+    const s = await setUp('TC-Times-Status');
+    const created = await s.create({ name: 'Status', gherkinScript: 'Given a script' });
+    await s.backdate(created.id!);
+
+    const updated = await s.patch(created.id!, { status: 'Ready' });
+
+    expect(Date.parse(updated.updatedAt!)).toBeGreaterThan(Date.parse(created.updatedAt!));
+    expect(updated.scriptUpdatedAt).toBeNull();
+  });
+
+  it('a script edit sets both times to the update', async () => {
+    const s = await setUp('TC-Times-Script');
+    const created = await s.create({ name: 'Script', gherkinScript: 'Given old' });
+    await s.backdate(created.id!);
+
+    const updated = await s.patch(created.id!, { gherkinScript: 'Given new' });
+
+    expect(updated.scriptUpdatedAt).toEqual(expect.any(String));
+    expect(updated.scriptUpdatedAt).toBe(updated.updatedAt);
+    expect(Date.parse(updated.updatedAt!)).toBeGreaterThan(Date.parse(created.updatedAt!));
+  });
+
+  it('restoring from the Trash leaves both times unchanged', async () => {
+    const s = await setUp('TC-Times-Restore');
+    const created = await s.create({ name: 'Restored', gherkinScript: 'Given old' });
+    await s.patch(created.id!, { gherkinScript: 'Given new' });
+    await s.backdate(created.id!);
+    const before = await s.detail(created.id!);
+
+    expect((await api().delete(`${s.base}/test-cases/${created.id}`).set(s.as(s.admin))).status).toBe(204);
+    const restored = await api().post(`${s.base}/trash/test-case/${created.id}/restore`).set(s.as(s.admin));
+    expect(restored.status).toBeLessThan(300);
+
+    const after = await s.detail(created.id!);
+    expect(after.updatedAt).toBe(before.updatedAt);
+    expect(after.scriptUpdatedAt).toBe(before.scriptUpdatedAt);
+  });
+});

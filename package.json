@@ -10,6 +10,8 @@
     "packages/*"
   ],
   "scripts": {
+    "postinstall": "npm run build -w @railgun-qa/reporting",
+    "setup": "node scripts/setup.js",
     "dev": "node scripts/dev.js",
     "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",

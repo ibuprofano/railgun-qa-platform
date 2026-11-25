@@ -61,6 +61,29 @@ describe('enqueue_job', () => {
     );
   });
 
+  it('queues report_generate with 3 attempts, once per report however often it is enqueued', async () => {
+    const reportId = '00000000-0000-4000-8000-' + String(Date.now()).slice(-12).padStart(12, '0');
+    const enqueueReport = (client: PoolClient) =>
+      client
+        .query<{ id: string }>(`SELECT enqueue_job('report_generate', $1::jsonb) AS id`, [JSON.stringify({ reportId })])
+        .then(({ rows }) => rows[0].id);
+    const first = (await inTransaction(enqueueReport, true))!;
+    const second = (await inTransaction(enqueueReport, true))!;
+    created.push(first, second);
+
+    expect(second).toBe(first);
+    const { rows } = await worker.query<{ max_attempts: number; n: string }>(
+      `SELECT max_attempts, (SELECT count(*) FROM graphile_worker._private_jobs WHERE key = $1) AS n
+       FROM graphile_worker._private_jobs WHERE id = $2`,
+      [`report:${reportId}`, first],
+    );
+    expect(rows[0]).toEqual({ max_attempts: 3, n: '1' });
+  });
+
+  it('refuses report_generate without a reportId', async () => {
+    await expect(inTransaction((client) => enqueue(client, 'report_generate'), true)).rejects.toThrow(/needs a reportId/);
+  });
+
   it("doesn't let the API's role touch the queue tables directly", async () => {
     await expect(app.query('SELECT * FROM graphile_worker.jobs')).rejects.toThrow(/permission denied/);
     await expect(app.query('SELECT * FROM graphile_worker._private_jobs')).rejects.toThrow(/permission denied/);

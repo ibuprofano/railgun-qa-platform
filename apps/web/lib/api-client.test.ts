@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
-import { ApiError, useApiClient } from './api-client';
+import { ApiError, fileNameFromDisposition, useApiClient } from './api-client';
 
 const getToken = vi.fn();
 const push = vi.fn();
@@ -79,5 +79,30 @@ describe('useApiClient', () => {
     const { result } = renderHook(() => useApiClient());
 
     await expect(result.current.request('/x')).rejects.toMatchObject({ status: 502, serverMessage: 'Bad Gateway' });
+  });
+
+  it('downloads a file with the bearer token and reads its name (report-pipeline)', async () => {
+    const blob = new Blob(['%PDF']);
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      blob: async () => blob,
+      headers: new Headers({ 'Content-Disposition': 'attachment; filename="bugs-dashboard-2026-11-25.pdf"' }),
+    } as Response);
+
+    const { result } = renderHook(() => useApiClient());
+    const file = await result.current.requestBlob('/projects/p1/reports/r1/file');
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/projects/p1/reports/r1/file'),
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer test-token' }) }),
+    );
+    expect(file).toEqual({ blob, fileName: 'bugs-dashboard-2026-11-25.pdf' });
+  });
+
+  it('reads file names from Content-Disposition, quoted or not', () => {
+    expect(fileNameFromDisposition('attachment; filename="a b.pdf"')).toBe('a b.pdf');
+    expect(fileNameFromDisposition('attachment; filename=plain.pdf')).toBe('plain.pdf');
+    expect(fileNameFromDisposition(null)).toBeNull();
   });
 });

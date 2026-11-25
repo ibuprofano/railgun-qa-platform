@@ -1,6 +1,6 @@
 # ADR 0006: Report Generation
 
-**Status:** Accepted
+**Status:** Accepted, amended by [ADR 0023](0023-chart-rendering.md) (one in-house chart module for the screen and reports), [ADR 0026](0026-report-rendering-library-and-fonts.md) (the spike: pdfmake confirmed, Noto fonts, a 30 s job budget) and [ADR 0027](0027-report-storage-and-delivery.md) (files in Postgres behind a swappable store until E3, delivered by an authenticated route, kept 7 days)
 **Date:** 2026-09-23
 **Amends:** [ADR 0001](0001-tech-stack.md) (adds a layer ADR 0001 named only as "report generation workers")
 
@@ -63,7 +63,7 @@ Constraints already fixed by earlier ADRs and the PRD:
 
 ## Open Items
 
-- A short spike before implementation: chart fidelity through the SVG path, font coverage including Japanese, and PDF generation time for a large execution.
+- ~~A short spike before implementation: chart fidelity through the SVG path, font coverage including Japanese, and PDF generation time for a large execution.~~ Done: [ADR 0026](0026-report-rendering-library-and-fonts.md).
 - Image size cap, maximum report size, and the resize dimension.
-- Retention period for generated report files and lifetime of the signed download link.
-- Final library choice (pdfmake or react-pdf), settled by the spike.
+- ~~Retention period for generated report files and lifetime of the signed download link.~~ 7 days, no signed link until E3: [ADR 0027](0027-report-storage-and-delivery.md).
+- ~~Final library choice (pdfmake or react-pdf), settled by the spike.~~ pdfmake: [ADR 0026](0026-report-rendering-library-and-fonts.md).

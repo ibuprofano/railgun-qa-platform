@@ -9,7 +9,8 @@ async function bootstrap() {
   // Local dev origin only (frontend-bootstrap) — production CORS origin is a
   // deployment-time decision tied to open-questions.md E1-E4 (hosting), not this.
   const corsOrigin = process.env.WEB_ORIGIN ?? 'http://localhost:3000';
-  app.enableCors({ origin: corsOrigin });
+  // Content-Disposition carries a report download's file name, which the web reads (report-pipeline).
+  app.enableCors({ origin: corsOrigin, exposedHeaders: ['Content-Disposition'] });
   const port = process.env.PORT ? Number(process.env.PORT) : 3001;
   await app.listen(port);
   console.log(`API listening on port ${port}`);

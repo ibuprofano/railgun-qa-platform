@@ -60,7 +60,7 @@ async function main(): Promise<void> {
     console.log(`Seeded ShopFlow into ${where} for ${result.target.displayName}:`);
     console.log(
       `  ${c.folders} folders, ${c.testCases} test cases, ${c.environments} environments (${c.credentials} credentials),` +
-        ` ${c.executions} executions (${c.runs} runs), ${c.bugs} bugs, ${c.teammates} teammates, ${c.activityEntries} activity entries`,
+        ` ${c.executions} executions (${c.runs} runs), ${c.bugs} bugs, ${c.tags} tags, ${c.teammates} teammates, ${c.activityEntries} activity entries`,
     );
   } finally {
     await prisma.$disconnect();

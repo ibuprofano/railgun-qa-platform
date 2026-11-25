@@ -1,6 +1,6 @@
 # ADR 0015: Test Case Status Changes
 
-**Status:** Accepted
+**Status:** Accepted, amended by [ADR 0025](0025-test-case-health-and-edit-times.md) (edit times and health rules)
 **Date:** 2026-10-26
 **Resolves:** open question G2
 

@@ -6,7 +6,8 @@ import { listTags, tagKeys } from '../../lib/tags-api';
 import { TagFilter } from '../tags/tag-filter';
 import { useApiClient } from '../../lib/api-client';
 import { useLiveConnected } from '../../lib/live-updates';
-import { executionKeys, listExecutions, type Browser, type ExecutionStatus } from '../../lib/executions-api';
+import { EXECUTION_STATUSES } from '@railgun-qa/reporting';
+import { executionKeys, listExecutions, type Browser } from '../../lib/executions-api';
 import {
   filterExecutions,
   sortExecutions,
@@ -20,12 +21,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { PlayCircle } from 'lucide-react';
+import { LayoutDashboard, PlayCircle } from 'lucide-react';
 import { EmptyState, ErrorState, ListSkeleton } from '../states';
 
 /** Radix Select can't use '' as a value; this stands for "no filter". */
 const ALL = '__all__';
-const STATUSES: ExecutionStatus[] = ['Draft', 'Ready', 'InProgress', 'Paused', 'Completed', 'Done'];
+/** Every status, Canceled included, so the Execution Status donut can set any of them. */
+const STATUSES = EXECUTION_STATUSES;
 const BROWSERS: Browser[] = ['Chromium', 'Firefox', 'WebKit'];
 /** How often the list is refetched while the live stream is down and something is under way. */
 export const LIST_REFETCH_MS = 10_000;
@@ -45,12 +47,34 @@ export interface ExecutionListProps {
   onSelect: (id: string) => void;
   canCreate: boolean;
   onCreateClick: () => void;
+  /** The list filters, when the screen keeps them so the dashboard can follow them; otherwise the list keeps its own. */
+  filters?: ExecutionFilters;
+  onFiltersChange?: (filters: ExecutionFilters) => void;
+  /** The Dashboard toggle: pressed while the dashboard is shown; shown only with `onShowDashboard`. */
+  dashboardShown?: boolean;
+  onShowDashboard?: () => void;
 }
 
-export function ExecutionList({ projectId, selectedId, onSelect, canCreate, onCreateClick }: ExecutionListProps) {
+export function ExecutionList({
+  projectId,
+  selectedId,
+  onSelect,
+  canCreate,
+  onCreateClick,
+  filters: controlledFilters,
+  onFiltersChange,
+  dashboardShown = false,
+  onShowDashboard,
+}: ExecutionListProps) {
   const apiClient = useApiClient();
   const [sort, setSort] = useState<(typeof SORT_OPTIONS)[number]['value']>('updatedAt:desc');
-  const [filters, setFilters] = useState<ExecutionFilters>({});
+  const [ownFilters, setOwnFilters] = useState<ExecutionFilters>({});
+  const filters = controlledFilters ?? ownFilters;
+  const setFilters = (update: (current: ExecutionFilters) => ExecutionFilters) => {
+    const next = update(filters);
+    setOwnFilters(next);
+    onFiltersChange?.(next);
+  };
   const liveConnected = useLiveConnected();
 
   const {
@@ -88,11 +112,25 @@ export function ExecutionList({ projectId, selectedId, onSelect, canCreate, onCr
     <Card className="flex h-full flex-col">
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle>Executions</CardTitle>
-        {canCreate && (
-          <Button type="button" size="sm" onClick={onCreateClick}>
-            New execution
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {onShowDashboard && (
+            <Button
+              type="button"
+              size="sm"
+              variant={dashboardShown ? 'secondary' : 'ghost'}
+              aria-pressed={dashboardShown}
+              onClick={onShowDashboard}
+            >
+              <LayoutDashboard className="size-4" />
+              Dashboard
+            </Button>
+          )}
+          {canCreate && (
+            <Button type="button" size="sm" onClick={onCreateClick}>
+              New execution
+            </Button>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col gap-3">
         <div className="grid grid-cols-2 gap-2">

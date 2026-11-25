@@ -17,6 +17,8 @@ export interface PurgeSummary {
   testCases: number;
   folderTrees: number;
   skippedFolderTrees: number;
+  /** Reports past their 7-day expiry, deleted with their files (ADR 0027). */
+  expiredReports: number;
   failedWorkspaces: string[];
 }
 
@@ -201,10 +203,12 @@ export async function purgeTrash(pool: Pool, options: { workspaceIds?: string[] 
     testCases: 0,
     folderTrees: 0,
     skippedFolderTrees: 0,
+    expiredReports: 0,
     failedWorkspaces: [],
   };
   for (const workspaceId of options.workspaceIds ?? (await listWorkspaceIds(pool))) {
     try {
+      summary.expiredReports += await purgeExpiredReports(pool, workspaceId);
       if (!(await hasAnythingDue(pool, workspaceId))) {
         continue;
       }
@@ -220,6 +224,14 @@ export async function purgeTrash(pool: Pool, options: { workspaceIds?: string[] 
     }
   }
   return summary;
+}
+
+/**
+ * Deletes the workspace's reports past their expiry (ADR 0027 decision 3); files go by
+ * cascade. No activity entry: expiry isn't a user action, and download entries are kept.
+ */
+async function purgeExpiredReports(pool: Pool, workspaceId: string): Promise<number> {
+  return withTenantContext(pool, workspaceId, async (client) => (await client.query('DELETE FROM report WHERE expires_at < now()')).rowCount ?? 0);
 }
 
 /** The `trash_purge` task: runs the purge and fails the job (so Graphile retries) if any workspace failed. */

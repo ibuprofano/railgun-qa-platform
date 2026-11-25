@@ -22,7 +22,7 @@ The system SHALL serve a server-sent event stream per project at `GET /projects/
 - **THEN** the response is the same `403` other project routes give, and no stream is opened
 
 ### Requirement: Execution changes emit an event only when they commit
-The system SHALL emit an `execution.changed` event carrying the execution's id whenever an execution is created, edited or deleted, its runs are reordered, it changes lifecycle status, or a run's outcome is recorded. It SHALL emit the event only after the change commits. A refused or rolled-back change SHALL emit nothing.
+The system SHALL emit an `execution.changed` event carrying the execution's id whenever an execution is created, edited, deleted or restored from the trash, its runs are reordered, it changes lifecycle status, or a run's outcome is recorded. It SHALL emit the event only after the change commits. A refused or rolled-back change SHALL emit nothing.
 
 #### Scenario: A colleague records an outcome
 - **WHEN** a Contributor records an outcome on a run while another member has the project's stream open
@@ -32,8 +32,12 @@ The system SHALL emit an `execution.changed` event carrying the execution's id w
 - **WHEN** a lifecycle action is refused with `409` because the execution is in the wrong status
 - **THEN** no event is sent on any stream
 
+#### Scenario: An execution is restored
+- **WHEN** an Admin restores a deleted execution while another member has the project's stream open
+- **THEN** that stream receives an `execution.changed` event with the execution's id
+
 ### Requirement: Changes to a run's linked bugs emit an event
-The system SHALL emit a `run.bugs.changed` event carrying the execution id and run id when a run's set of linked bugs changes or a linked bug is edited or deleted. This covers a bug filed from a run, a bug auto-created on Fail, and an existing bug linked to a run. It SHALL emit the event only after the change commits.
+The system SHALL emit a `run.bugs.changed` event carrying the execution id and run id when a run's set of linked bugs changes or a linked bug is edited, deleted or restored from the trash. This covers a bug filed from a run, a bug auto-created on Fail, and an existing bug linked to a run. It SHALL emit the event only after the change commits.
 
 #### Scenario: A bug is auto-created on Fail
 - **WHEN** a Contributor sets a run to Fail on an execution with auto-create bug on
@@ -43,8 +47,12 @@ The system SHALL emit a `run.bugs.changed` event carrying the execution id and r
 - **WHEN** a Contributor edits a bug that is not linked to any run
 - **THEN** no `run.bugs.changed` event is sent
 
+#### Scenario: A linked bug is restored
+- **WHEN** an Admin restores a deleted bug that is linked to a run of a live execution
+- **THEN** open streams on the project receive `run.bugs.changed` for that run
+
 ### Requirement: Events carry identifiers only and reach only their project
-Each event SHALL contain only its type and identifiers: project, execution and, where relevant, run. It SHALL NOT contain names, outcomes, statuses or any other content. An event SHALL be delivered only to streams open on the project it belongs to, never to another project or workspace.
+Each event SHALL contain only its type and identifiers: project, execution and, where relevant, run, or, for a report event, the report. It SHALL NOT contain names, outcomes, statuses or any other content. An event SHALL be delivered only to streams open on the project it belongs to, never to another project or workspace.
 
 #### Scenario: Another workspace's stream
 - **WHEN** an execution changes in workspace A's project
@@ -75,3 +83,10 @@ The web app SHALL keep at most one event stream per browser tab, for the active 
 #### Scenario: Switching project
 - **WHEN** the user switches from project P1 to project P2
 - **THEN** the tab's stream on P1 closes and one stream on P2 opens
+
+### Requirement: A report's status changes emit an event
+The system SHALL emit a `report.changed` event carrying the report's id whenever a report's generation starts, finishes or fails, only after that change commits. The event SHALL carry no status, name or file content.
+
+#### Scenario: A report becomes Ready
+- **WHEN** a report's generation finishes while its requester has the project's stream open
+- **THEN** that stream receives a `report.changed` event with the report's id and nothing else but the project's id

@@ -1,5 +1,8 @@
+import type { HealthFlag, IssueFlag, TestCaseDashboard, TestCaseHealth } from '@railgun-qa/reporting';
 import type { ApiClient } from './api-client';
 import type { RunOutcome } from './executions-api';
+
+export type { HealthFlag, IssueFlag, TestCaseHealth };
 
 export type TestCaseStatus = 'Draft' | 'Ready' | 'Deprecated';
 export type SourceType = 'Gherkin' | 'Manual';
@@ -22,6 +25,14 @@ export interface TestCase {
   lastOutcome?: RunOutcome | null;
   /** Tags carried (ADR 0016), sorted by id; missing = none. */
   tagIds?: string[];
+  /** Edit times (ADR 0025), ISO strings; optional here only so older fixtures stay minimal. */
+  createdAt?: string;
+  /** The last change to its name, script, status or tags, or a move. */
+  updatedAt?: string;
+  /** The last edit of its script; null if never edited after creation. */
+  scriptUpdatedAt?: string | null;
+  /** Its health flags (specs/test-case-health). Sent on the detail and write responses, not the list. */
+  health?: TestCaseHealth;
 }
 
 export interface CreateTestCaseInput {
@@ -84,3 +95,18 @@ export function moveTestCase(
     body: JSON.stringify(target),
   });
 }
+
+/** The dashboard's shape, written once in @railgun-qa/reporting for the API, the PDF and the screen. */
+export type { TestCaseDashboard } from '@railgun-qa/reporting';
+
+/** The Test Cases dashboard (specs/test-case-metrics); daily series follow `timeZone`. */
+export function getTestCaseDashboard(client: ApiClient, projectId: string, timeZone: string): Promise<TestCaseDashboard> {
+  return client.request(`/projects/${projectId}/test-cases/dashboard?tz=${encodeURIComponent(timeZone)}`);
+}
+
+export const testCaseKeys = {
+  /** The list; every edit invalidates it, and so everything nested under it. */
+  list: (projectId: string) => ['projects', projectId, 'test-cases'] as const,
+  /** Under the list key, so the edits' invalidations also mark the dashboard stale. */
+  dashboard: (projectId: string, timeZone: string) => ['projects', projectId, 'test-cases', 'dashboard', timeZone] as const,
+};

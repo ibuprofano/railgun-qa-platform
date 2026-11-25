@@ -33,6 +33,13 @@ jobs:
       # lint script (packages/shared-types, packages/reporting).
       - run: npm run lint
       - run: npm run typecheck
+      # Report fonts (ADR 0026, ADR 0027): fetched and SHA-256-verified, cached on the script
+      # that pins them, so a moved or altered upstream file fails CI.
+      - uses: actions/cache@v4
+        with:
+          path: apps/worker/fonts
+          key: report-fonts-${{ hashFiles('apps/worker/scripts/fetch-fonts.js') }}
+      - run: npm run fonts -w apps/worker
       - name: Set up database roles
         run: |
           node scripts/apply-sql.js db/init/01-roles.sql

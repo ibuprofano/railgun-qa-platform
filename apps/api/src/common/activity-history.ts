@@ -1,5 +1,12 @@
 import { BadRequestException } from '@nestjs/common';
-import { type ActivityEntryRow, type ActivityKeysetCursor, decodeActivityCursor, type HistoryPage } from './activity-log-reader';
+import {
+  type ActivityEntryRow,
+  type ActivityKeysetCursor,
+  type ActivityType,
+  decodeActivityCursor,
+  type HistoryPage,
+  isActivityType,
+} from './activity-log-reader';
 
 /** One activity entry as the history endpoints return it (ADR 0021). */
 export interface ActivityEntryResponse {
@@ -29,6 +36,17 @@ export function parseHistoryCursor(before: unknown): ActivityKeysetCursor | unde
     throw new BadRequestException('before must be a cursor returned by a previous page');
   }
   return cursor;
+}
+
+/** Parses the feed's optional `type` filter; an unknown value is a 400 (specs/activity-log). */
+export function parseActivityType(type: unknown): ActivityType | undefined {
+  if (type === undefined || type === '') {
+    return undefined;
+  }
+  if (!isActivityType(type)) {
+    throw new BadRequestException(`type must be one of: test-cases, executions, runs, bugs, folders, environments, projects, tags`);
+  }
+  return type;
 }
 
 function toEntry(row: ActivityEntryRow): ActivityEntryResponse {

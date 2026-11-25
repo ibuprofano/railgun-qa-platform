@@ -11,6 +11,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -26,6 +27,9 @@ import { type ExecutionActor, loadActorDisplayName } from '../executions/executi
 import { parseMoveTarget, parseParentId } from '../folders/tree-rules';
 import { assertTargetFolder, keyForAppend, keyForMove, logTreeActivity } from '../folders/folder-queries';
 import { parseTagIds, projectTags, setItemTags } from '../tags/tag-queries';
+import { parseTimeZone } from '../overview/overview-trends';
+import { loadTestCaseDashboard, type TestCaseDashboard } from './test-case-dashboard';
+import { TEST_CASE_FACTS_SQL, type TestCaseFactsRow, type TestCaseHealth, testCaseHealth } from '@railgun-qa/reporting';
 
 type TestCaseStatus = 'Draft' | 'Ready' | 'Deprecated';
 
@@ -38,6 +42,9 @@ interface TestCaseRow {
   position_key: string;
   last_outcome: RunOutcome | null;
   tag_ids: string[];
+  created_at: Date;
+  updated_at: Date;
+  script_updated_at: Date | null;
 }
 
 interface TestCaseResponse {
@@ -53,6 +60,16 @@ interface TestCaseResponse {
   lastOutcome: RunOutcome | null;
   /** Tags carried (ADR 0016), sorted by id. */
   tagIds: string[];
+  createdAt: string;
+  /** The last change to its name, script, status or tags, or a move (ADR 0025). */
+  updatedAt: string;
+  /** The last edit of its Gherkin script; null if never edited after creation. */
+  scriptUpdatedAt: string | null;
+}
+
+/** The detail, and every write's response: the list plus the test case's health (ADR 0025). */
+interface TestCaseDetailResponse extends TestCaseResponse {
+  health: TestCaseHealth;
 }
 
 interface CreateTestCaseBody {
@@ -84,12 +101,16 @@ function toResponse(row: TestCaseRow): TestCaseResponse {
     positionKey: row.position_key,
     lastOutcome: row.last_outcome,
     tagIds: row.tag_ids,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+    scriptUpdatedAt: row.script_updated_at?.toISOString() ?? null,
   };
 }
 
 /** One read shape for list, detail and every write's response. */
 const TEST_CASE_SELECT = Prisma.sql`
   SELECT tc.id, tc.name, tc.gherkin_script, tc.status, tc.folder_id, tc.position_key, last.outcome AS last_outcome,
+    tc.created_at, tc.updated_at, tc.script_updated_at,
     COALESCE((SELECT array_agg(tt.tag_id ORDER BY tt.tag_id) FROM test_case_tag tt WHERE tt.test_case_id = tc.id), '{}') AS tag_ids
   FROM test_case tc
   LEFT JOIN LATERAL (
@@ -100,12 +121,21 @@ const TEST_CASE_SELECT = Prisma.sql`
   ) last ON true
 `;
 
-async function loadTestCase(tx: Prisma.TransactionClient, projectId: string, testCaseId: string): Promise<TestCaseRow | null> {
+async function loadTestCase(
+  tx: Prisma.TransactionClient,
+  projectId: string,
+  testCaseId: string,
+): Promise<TestCaseDetailResponse | null> {
   const [row] = await tx.$queryRaw<TestCaseRow[]>`
     ${TEST_CASE_SELECT}
     WHERE tc.id = ${testCaseId}::uuid AND tc.project_id = ${projectId}::uuid AND tc.deleted_at IS NULL
   `;
-  return row ?? null;
+  if (!row) {
+    return null;
+  }
+  // The shared facts query and rules, so the detail and the dashboard can't disagree.
+  const [facts] = await tx.$queryRawUnsafe<TestCaseFactsRow[]>(TEST_CASE_FACTS_SQL, projectId, testCaseId);
+  return { ...toResponse(row), health: testCaseHealth(facts) };
 }
 
 @Controller('projects/:projectId/test-cases')
@@ -125,7 +155,7 @@ export class TestCasesController {
     @Param('projectId') projectId: string,
     @Body() body: CreateTestCaseBody,
     @Req() request: AuthenticatedRequest,
-  ): Promise<TestCaseResponse> {
+  ): Promise<TestCaseDetailResponse> {
     if (typeof body.name !== 'string' || body.name.trim().length === 0) {
       throw new BadRequestException('name must be a non-empty string');
     }
@@ -156,7 +186,7 @@ export class TestCasesController {
       return (await loadTestCase(tx, projectId, created.id))!;
     });
 
-    return toResponse(row);
+    return row;
   }
 
   @Get()
@@ -176,6 +206,24 @@ export class TestCasesController {
     return rows.map(toResponse);
   }
 
+  /**
+   * The Test Cases dashboard (PRD §6.2.4, specs/test-case-metrics). Declared above
+   * `:testCaseId` so Nest matches it first (design.md decision 4).
+   */
+  @Get('dashboard')
+  @UseGuards(ProjectRoleGuard)
+  @RequireProjectRole('Viewer')
+  async dashboard(
+    @Param('projectId') projectId: string,
+    @Query('tz') tz: unknown,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<TestCaseDashboard> {
+    const workspaceId = await resolveProjectWorkspaceId(this.prisma, request.auth!.userId, projectId);
+    return withTenantContext(this.prisma, workspaceId, async (tx) =>
+      loadTestCaseDashboard(tx, projectId, await parseTimeZone(tx, tz)),
+    );
+  }
+
   @Get(':testCaseId')
   @UseGuards(ProjectRoleGuard)
   @RequireProjectRole('Viewer')
@@ -183,7 +231,7 @@ export class TestCasesController {
     @Param('projectId') projectId: string,
     @Param('testCaseId') testCaseId: string,
     @Req() request: AuthenticatedRequest,
-  ): Promise<TestCaseResponse> {
+  ): Promise<TestCaseDetailResponse> {
     const workspaceId = await resolveProjectWorkspaceId(this.prisma, request.auth!.userId, projectId);
 
     const row = await withTenantContext(this.prisma, workspaceId, (tx) => loadTestCase(tx, projectId, testCaseId));
@@ -192,7 +240,7 @@ export class TestCasesController {
       throw new NotFoundException('test case not found');
     }
 
-    return toResponse(row);
+    return row;
   }
 
   @Patch(':testCaseId')
@@ -203,7 +251,7 @@ export class TestCasesController {
     @Param('testCaseId') testCaseId: string,
     @Body() body: UpdateTestCaseBody,
     @Req() request: AuthenticatedRequest,
-  ): Promise<TestCaseResponse> {
+  ): Promise<TestCaseDetailResponse> {
     if (body.name !== undefined && (typeof body.name !== 'string' || body.name.trim().length === 0)) {
       throw new BadRequestException('name must be a non-empty string');
     }
@@ -247,16 +295,21 @@ export class TestCasesController {
         }
       }
 
+      // ADR 0025: the edit times move only when something changed.
+      const changed = Object.keys(changes).length > 0;
+      const scriptChanged = changes.gherkinScript === true;
       await tx.$executeRaw`
         UPDATE test_case
         SET
           name = COALESCE(${name}, name),
           gherkin_script = CASE WHEN ${hasGherkinScriptUpdate} THEN ${gherkinScript} ELSE gherkin_script END,
-          status = COALESCE(${status}, status)
+          status = COALESCE(${status}, status),
+          updated_at = CASE WHEN ${changed} THEN now() ELSE updated_at END,
+          script_updated_at = CASE WHEN ${scriptChanged} THEN now() ELSE script_updated_at END
         WHERE id = ${testCaseId}::uuid
       `;
       // ADR 0015: every change (status included) is logged; an update that changes nothing isn't.
-      if (Object.keys(changes).length > 0) {
+      if (changed) {
         await logTreeActivity(tx, actor, 'test_case.updated', { type: 'test_case', id: testCaseId, name: name ?? current.name }, {
           changes,
         });
@@ -268,7 +321,7 @@ export class TestCasesController {
       throw new NotFoundException('test case not found');
     }
 
-    return toResponse(row);
+    return row;
   }
 
   /** Moves a test case to a folder (or the root) after a sibling test case, or first (folder-tree). */
@@ -281,7 +334,7 @@ export class TestCasesController {
     @Param('testCaseId') testCaseId: string,
     @Body() body: Record<string, unknown>,
     @Req() request: AuthenticatedRequest,
-  ): Promise<TestCaseResponse> {
+  ): Promise<TestCaseDetailResponse> {
     if (!isUuid(testCaseId)) {
       throw new NotFoundException('test case not found');
     }
@@ -300,7 +353,7 @@ export class TestCasesController {
       await assertTargetFolder(tx, projectId, target.parentFolderId);
       const key = await keyForMove(tx, 'test_case', projectId, target.parentFolderId, target.afterId, testCaseId);
       await tx.$executeRaw`
-        UPDATE test_case SET folder_id = ${target.parentFolderId}::uuid, position_key = ${key}
+        UPDATE test_case SET folder_id = ${target.parentFolderId}::uuid, position_key = ${key}, updated_at = now()
         WHERE id = ${testCaseId}::uuid
       `;
       await logTreeActivity(tx, actor, 'test_case.moved', { type: 'test_case', id: testCaseId, name: current.name }, {
@@ -310,7 +363,7 @@ export class TestCasesController {
       return (await loadTestCase(tx, projectId, testCaseId))!;
     });
 
-    return toResponse(row);
+    return row;
   }
 
   @Delete(':testCaseId')

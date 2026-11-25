@@ -11,6 +11,10 @@ import { BugsController } from './bugs/bugs.controller';
 import { FoldersController } from './folders/folders.controller';
 import { TagsController } from './tags/tags.controller';
 import { WorkspaceController } from './workspace/workspace.controller';
+import { ActivityController } from './activity/activity.controller';
+import { TrashController } from './trash/trash.controller';
+import { OverviewController } from './overview/overview.controller';
+import { ReportsController } from './reports/reports.controller';
 import { ClerkAuthGuard } from './common/clerk-auth.guard';
 import { ProjectRoleGuard } from './common/project-role.guard';
 import { WorkspaceOwnerGuard } from './common/workspace-owner.guard';
@@ -37,6 +41,10 @@ import {
     TagsController,
     WorkspaceController,
     LiveEventsController,
+    ActivityController,
+    TrashController,
+    OverviewController,
+    ReportsController,
   ],
   providers: [
     PrismaService,

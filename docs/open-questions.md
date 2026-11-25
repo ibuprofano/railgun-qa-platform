@@ -31,6 +31,11 @@ Each row says what it **blocks**, so the list can be worked in an order that unb
 | Cancel (PRD §6.3.4): who may cancel, and what happens to Pending runs | [ADR 0019](adr/0019-execution-cancel.md): Contributors and Admins; timer stops, Pending runs stay Pending, every outcome becomes read-only |
 | G7: Try Again (deleted test cases, attempt history) | [ADR 0020](adr/0020-execution-try-again.md): offered on Completed, Done and Canceled; Restart returns to Ready, keeps results in a `test_run_attempt` table and drops runs whose test case was deleted; Duplicate creates a Draft with every eligible test case selected; bugs record their attempt (one auto-created bug per run per attempt) |
 | B2: Queue library (pg-boss or Graphile Worker), checked against the ORM and the pooler | [ADR 0018](adr/0018-queue-library.md): Graphile Worker; enqueue through a migrator-owned SECURITY DEFINER wrapper inside the existing transaction (no Prisma adapter needed); the worker uses a direct connection |
+| F6, chart library: what draws the dashboard and report charts | [ADR 0023](adr/0023-chart-rendering.md): one in-house module in `packages/reporting` turns chart specifications into SVG geometry; reports serialize it to SVG strings (ADR 0006) and the web renders it with React plus its interactive layer. No chart library. |
+| B3: How Health Score history is built, including for projects with runs but no snapshots | [ADR 0024](adr/0024-health-score-history.md): a daily `health_snapshot` worker job records each live project's score per UTC day; days without a snapshot are recomputed from the record on request (Ready status approximated as today's) and not stored; today's point is the live score. |
+| Test Cases dashboard groundwork (found planning Phase 9 Slice 4): no edit times on test cases, health rules only in the PRD, where the dashboard sits | [ADR 0025](adr/0025-test-case-health-and-edit-times.md): `updated_at` and `script_updated_at` columns backfilled from the activity log; the health rules written once in `packages/reporting` for both the dashboard and the PRD §6.2.3 banners, which ship in the same slice; the dashboard is the default right panel, with folder summaries kept. |
+| D1: Report rendering spike (SVG chart fidelity, Japanese fonts, time for a large execution; pdfmake or react-pdf) | [ADR 0026](adr/0026-report-rendering-library-and-fonts.md): pdfmake; Noto Sans JP for text and charts, Noto Sans Mono CJK JP for Gherkin; a 30 s report-job timeout. D2 and D3 stay open. |
+| D3: Retention of generated report files and lifetime of the signed link | [ADR 0027](adr/0027-report-storage-and-delivery.md): reports expire 7 days after they are requested and the daily purge removes them; until E3 there is no signed link — the requester downloads through an authenticated API route. |
 
 ## A. Authentication and API access
 
@@ -47,7 +52,7 @@ Each row says what it **blocks**, so the list can be worked in an order that unb
 | # | Question | Source | Blocks | Suggested resolution |
 |---|---|---|---|---|
 | B1 | ~~How is the tenant context applied with the chosen ORM (Prisma extension versus explicit transaction helper)? Does friction justify a different ORM?~~ | ADR 0003 | First data-access code | **Resolved:** [ADR 0008](adr/0008-tenant-context-implementation.md) — explicit `withTenantContext` helper. |
-| B3 | Health Score snapshot job: how is history backfilled for a project that has runs but no snapshots yet? | Decision 2, readme §3 | Trend charts | Recompute from run history on first request, then snapshot daily. |
+| ~~B3~~ | ~~Health Score snapshot job: how is history backfilled for a project that has runs but no snapshots yet?~~ | Decision 2, readme §3 | Trend charts | **Resolved:** [ADR 0024](adr/0024-health-score-history.md). |
 | B4 | Activity log: partitioning threshold, who holds the break-glass credentials, the erasure runbook, and whether Owners can view a purged project's log. | ADR 0007 | Production readiness | Set thresholds and custody before the first external customer. |
 
 ## C. Secrets
@@ -61,9 +66,9 @@ Each row says what it **blocks**, so the list can be worked in an order that unb
 
 | # | Question | Source | Blocks | Suggested resolution |
 |---|---|---|---|---|
-| D1 | Spike: chart fidelity through SVG, Japanese font coverage, PDF time for a large execution. This also decides pdfmake versus react-pdf. | ADR 0006 | Report implementation | Time-boxed spike before building any report. |
+| ~~D1~~ | ~~Spike: chart fidelity through SVG, Japanese font coverage, PDF time for a large execution. This also decides pdfmake versus react-pdf.~~ | ADR 0006 | Report implementation | Time-boxed spike before building any report. |
 | D2 | Image resize dimension, maximum report size, and total-size cap. | ADR 0006 | HTML export | Start at 1600 px longest side; set the cap from the spike. |
-| D3 | Retention of generated report files and lifetime of the signed link (`Report.expires_at`). | ADR 0006, readme §3 | Report storage | Short retention, for example 7 days, with regeneration on demand. |
+| ~~D3~~ | ~~Retention of generated report files and lifetime of the signed link (`Report.expires_at`).~~ | ADR 0006, readme §3 | Report storage | Short retention, for example 7 days, with regeneration on demand. |
 
 ## E. Hosting and infrastructure (ADR 0001 layers still "either/or")
 
@@ -84,7 +89,7 @@ Each row says what it **blocks**, so the list can be worked in an order that unb
 | F3 | Testing strategy | Unit, integration and end-to-end tools, including the cross-tenant test suite that ADR 0003 requires (readme §2.6). |
 | F4 | ~~Repository layout~~ | **Resolved:** [ADR 0010](adr/0010-monorepo-layout.md) — npm workspaces, `apps/` + `packages/` split. |
 | F5 | API contract and shared types | ADR 0001's claim of one type system from database to UI needs a shared types package or OpenAPI/zod code generation to be true. |
-| F6 | ~~Frontend libraries~~ Remaining frontend libraries | **Partially resolved:** [ADR 0011](adr/0011-frontend-ui-stack.md) settled styling/components (Tailwind v4 + shadcn/ui), data fetching (TanStack Query), and forms (react-hook-form + zod). Drag-and-drop **resolved** by [ADR 0014](adr/0014-drag-and-drop-and-ordering.md): dnd-kit, in-house base-36 fractional keys, Move to… as the accessible alternative; the folder tree and execution run reordering share it. Still open: the traceability graph, and a chart library — each decided when the phase that builds it starts. (The Gherkin editor was never a library gap: PRD §6.2.3 specifies a plain textarea, already built.) |
+| F6 | ~~Frontend libraries~~ Remaining frontend libraries | **Partially resolved:** [ADR 0011](adr/0011-frontend-ui-stack.md) settled styling/components (Tailwind v4 + shadcn/ui), data fetching (TanStack Query), and forms (react-hook-form + zod). Drag-and-drop **resolved** by [ADR 0014](adr/0014-drag-and-drop-and-ordering.md): dnd-kit, in-house base-36 fractional keys, Move to… as the accessible alternative; the folder tree and execution run reordering share it. Chart library **resolved** by [ADR 0023](adr/0023-chart-rendering.md): in-house SVG geometry in `packages/reporting`, shared by the screen and reports. Still open: the traceability graph, decided when the phase that builds it starts. (The Gherkin editor was never a library gap: PRD §6.2.3 specifies a plain textarea, already built.) |
 | F7 | Non-functional requirements | Scale targets, availability, backups with recovery objectives, retention, and compliance (GDPR). |
 | F8 | Attachment pipeline | Upload validation the storage layer cannot enforce (5 per bug, content type, size), EXIF stripping, optional malware scanning. |
 | F9 | Cost and vendor count | Clerk, hosting, database, storage and email, plus KMS later, in one estimate. |
@@ -103,4 +108,4 @@ Each row says what it **blocks**, so the list can be worked in an order that unb
 
 | # | Item |
 |---|---|
-| H1 | Endpoints that exist in the product but are not specified in readme §4 (the format allows three): invitations (create, resend, revoke, accept, decline), revealing an environment credential, trash (list, restore), reports (request, download), and the SSE streams. The SSE stream now exists as `GET /projects/:projectId/events` (`sse-live-updates`, spec `live-updates`); readme §4 still doesn't specify it. |
+| H1 | Endpoints that exist in the product but are not specified in readme §4 (the format allows three): invitations (create, resend, revoke, accept, decline), revealing an environment credential, trash (list, restore), reports (request, download), and the SSE streams. The SSE stream now exists as `GET /projects/:projectId/events` (`sse-live-updates`, spec `live-updates`); readme §4 still doesn't specify it. Trash now exists as `GET /projects/:projectId/trash` and `POST /projects/:projectId/trash/:type/:id/restore` (`activity-and-trash`, spec `trash-restore`, [ADR 0022](adr/0022-trash-restore.md)), also not in readme §4. |

@@ -4,6 +4,7 @@ import { ProjectSettingsScreen } from './project-settings-screen';
 import { renderWithProviders } from '../../test/render-with-providers';
 import { ApiError } from '../../lib/api-client';
 import { useSessionContext } from '../../lib/session-context';
+import { listEnvironments } from '../../lib/environments-api';
 
 const request = vi.fn();
 
@@ -13,6 +14,11 @@ vi.mock('../../lib/api-client', async (importOriginal) => ({
 }));
 vi.mock('../../lib/session-context', () => ({ useSessionContext: vi.fn() }));
 vi.mock('../../lib/notify', () => ({ notifySuccess: vi.fn() }));
+// The Environments section reads through its own client call, kept apart from the rename's `request`.
+vi.mock('../../lib/environments-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/environments-api')>()),
+  listEnvironments: vi.fn(),
+}));
 
 const mockedSession = useSessionContext as unknown as ReturnType<typeof vi.fn>;
 
@@ -35,6 +41,7 @@ function mockRole(role: 'Admin' | 'Contributor') {
 describe('ProjectSettingsScreen', () => {
   beforeEach(() => {
     request.mockReset();
+    vi.mocked(listEnvironments).mockReset().mockResolvedValue([]);
   });
 
   it('lets an Admin rename the project and refreshes the project list and the session project', async () => {
@@ -82,5 +89,16 @@ describe('ProjectSettingsScreen', () => {
 
     expect(screen.getByRole('alert').textContent).toMatch(/access denied/i);
     expect(screen.queryByLabelText('Project name')).toBeNull();
+    expect(screen.queryByText('Environments')).toBeNull();
+    expect(listEnvironments).not.toHaveBeenCalled();
+  });
+
+  it('shows an Admin the Environments section below General', async () => {
+    mockRole('Admin');
+    renderWithProviders(<ProjectSettingsScreen />);
+
+    expect(await screen.findByText('No environments yet')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Add environment/ })).toBeTruthy();
+    expect(listEnvironments).toHaveBeenCalledWith(expect.anything(), 'p1');
   });
 });

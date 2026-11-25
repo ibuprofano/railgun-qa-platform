@@ -148,3 +148,41 @@ export function listBugHistory(
 ): Promise<HistoryPage> {
   return historyPage(tx, params, Prisma.sql`entity_type = 'bug' AND entity_id = ${params.bugId}::uuid`);
 }
+
+/**
+ * The project feed's filters (PRD §6.6 pills) → the entity types each one covers
+ * (activity-and-trash design.md decision 1). Matched on `entity_type`, not `category`:
+ * categories were written per screen (folders and tags under "Test Cases", runs under
+ * "Executions") and entries are immutable, so they can't be remapped.
+ */
+export const ACTIVITY_TYPE_ENTITIES = {
+  'test-cases': ['test_case'],
+  executions: ['test_execution'],
+  runs: ['test_run'],
+  bugs: ['bug'],
+  folders: ['folder'],
+  environments: ['environment', 'environment_credential'],
+  // Memberships and invitations join here when they exist (PRD §6.6).
+  projects: ['project'],
+  tags: ['tag'],
+} as const satisfies Record<string, readonly string[]>;
+
+export type ActivityType = keyof typeof ACTIVITY_TYPE_ENTITIES;
+
+export function isActivityType(value: unknown): value is ActivityType {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(ACTIVITY_TYPE_ENTITIES, value);
+}
+
+/**
+ * Every entry of one project, newest first, optionally narrowed to one feed type
+ * (specs/activity-log). Workspace entries have no project_id, so they never match.
+ */
+export function listProjectActivity(
+  tx: Prisma.TransactionClient,
+  params: HistoryParams & { type?: ActivityType },
+): Promise<HistoryPage> {
+  const subject = params.type
+    ? Prisma.sql`entity_type = ANY(${[...ACTIVITY_TYPE_ENTITIES[params.type]]}::text[])`
+    : Prisma.sql`TRUE`;
+  return historyPage(tx, params, subject);
+}

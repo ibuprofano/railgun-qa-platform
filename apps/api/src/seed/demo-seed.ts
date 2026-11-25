@@ -1,3 +1,4 @@
+import { RESOLVED_STATUSES } from '../bugs/bug-rules';
 import { createHash } from 'crypto';
 import { Prisma } from '@prisma/client';
 import type { PrismaService } from '../common/prisma.service';
@@ -11,6 +12,7 @@ import {
   EXECUTIONS,
   FOLDERS,
   MARKER_FOLDER_KEY,
+  TAGS,
   TEAMMATES,
   TEST_CASES,
   type Actor,
@@ -45,6 +47,7 @@ export interface SeedCounts {
   executions: number;
   runs: number;
   bugs: number;
+  tags: number;
   activityEntries: number;
 }
 
@@ -163,6 +166,15 @@ export async function seedDemo(
     if (clash.length > 0) {
       throw new SeedConflictError(`The project already has a root folder named "${clash[0].name}"; rename it, then seed again`);
     }
+    // Tag names are unique per project (ADR 0016), so a seeded tag name can't already exist.
+    const tagClash = await tx.$queryRaw<{ name: string }[]>`
+      SELECT name FROM tag
+      WHERE project_id = ${projectId}::uuid AND lower(name) IN (${Prisma.join(TAGS.map((t) => t.name.toLowerCase()))})
+      ORDER BY name LIMIT 1
+    `;
+    if (tagClash.length > 0) {
+      throw new SeedConflictError(`The project already has a tag named "${tagClash[0].name}"; rename it, then seed again`);
+    }
 
     // Teammates: "user" rows need app.user_id = their own id (WITH CHECK), as in provisionIdentity.
     for (const teammate of TEAMMATES) {
@@ -217,16 +229,29 @@ export async function seedDemo(
       }),
     );
     // Test case creation isn't logged by the API, so it isn't here either (design.md).
+    // Script edits are, the way the API's update writes them (test-cases-dashboard design.md
+    // decision 6); the edit times follow ADR 0025.
+    for (const t of TEST_CASES) {
+      if (t.scriptEdit) {
+        activity.push({
+          key: `test_case:${t.key}:script-edit`, actor: t.scriptEdit.by, actionCode: 'test_case.updated', entityType: 'test_case',
+          entityId: id(`test_case:${t.key}`), entityName: t.name, category: 'Test Cases',
+          details: { changes: { gherkinScript: true } }, at: at(t.scriptEdit.daysAgo),
+        });
+      }
+    }
     await insertRows(
       tx,
       'test_case',
       [
         ['id', 'uuid'], ['project_id', 'uuid'], ['workspace_id', 'uuid'], ['name'], ['gherkin_script'], ['status'],
-        ['folder_id', 'uuid'], ['position_key'], ['created_at', 'timestamptz'],
+        ['folder_id', 'uuid'], ['position_key'], ['created_at', 'timestamptz'], ['updated_at', 'timestamptz'],
+        ['script_updated_at', 'timestamptz'],
       ],
       TEST_CASES.map((t) => [
         id(`test_case:${t.key}`), projectId, workspaceId, t.name, t.gherkin, t.status,
         id(`folder:${t.folderKey}`), nextKey(`cases:${t.folderKey}`), at(t.createdDaysAgo),
+        at(t.scriptEdit?.daysAgo ?? t.createdDaysAgo), t.scriptEdit ? at(t.scriptEdit.daysAgo) : null,
       ]),
     );
 
@@ -287,10 +312,15 @@ export async function seedDemo(
             entityId: runId, entityName: testCase.name, category: 'Executions', details: { executionId, from: 'Pending', to: outcome }, at: outcomeAt,
           });
         }
-        runInfo.set(`${e.key}:${run.testCaseKey}`, { runId, outcomeAt, by, name: testCase.name, gherkin: testCase.gherkin });
+        // A run snapshots the script as it was when its execution started.
+        const script =
+          started && testCase.scriptEdit && e.startedDaysAgo! > testCase.scriptEdit.daysAgo
+            ? testCase.scriptEdit.previousGherkin
+            : testCase.gherkin;
+        runInfo.set(`${e.key}:${run.testCaseKey}`, { runId, outcomeAt, by, name: testCase.name, gherkin: script });
         runRows.push([
           runId, executionId, workspaceId, id(`test_case:${run.testCaseKey}`), index + 1, outcome,
-          started ? testCase.name : null, started ? testCase.gherkin : null,
+          started ? testCase.name : null, started ? script : null,
           outcomeAt, outcomeAt ? people[by].id : null, at(e.createdDaysAgo), outcomeAt ? people[by].name : null,
         ]);
       });
@@ -349,7 +379,24 @@ export async function seedDemo(
       runRows,
     );
 
+    // Tags (ADR 0016), created by the owner before any bug carrying them (specs/demo-seed).
+    const tagName = new Map(TAGS.map((t) => [t.key, t.name]));
+    await insertRows(
+      tx,
+      'tag',
+      [['id', 'uuid'], ['project_id', 'uuid'], ['workspace_id', 'uuid'], ['name'], ['color'], ['created_at', 'timestamptz']],
+      TAGS.map((t) => {
+        const tagId = id(`tag:${t.key}`);
+        activity.push({
+          key: `tag:${t.key}:created`, actor: 'owner', actionCode: 'tag.created', entityType: 'tag',
+          entityId: tagId, entityName: t.name, category: 'Test Cases', details: { color: t.color }, at: at(t.createdDaysAgo),
+        });
+        return [tagId, projectId, workspaceId, t.name, t.color, at(t.createdDaysAgo)];
+      }),
+    );
+
     // Bugs: run-linked ones copy the run's snapshots (ADR 0013) and come after its outcome.
+    const bugTagRows: Row[] = [];
     const bugRows = BUGS.map((b) => {
       const bugId = id(`bug:${b.key}`);
       const run = b.run ? runInfo.get(`${b.run.executionKey}:${b.run.testCaseKey}`)! : null;
@@ -360,7 +407,17 @@ export async function seedDemo(
         if (b.autoCreated || createdAt < earliest) createdAt = earliest;
       }
       const reporter = b.autoCreated && run ? run.by : b.reporter;
-      const createdDetails = b.autoCreated ? { auto: true, testRunId: run!.runId } : run ? { testRunId: run.runId } : null;
+      // As the app writes it: the tags a bug was filed with are named in its bug.created entry.
+      const tags = (b.tagKeys ?? []).map((key) => tagName.get(key)!);
+      const tagDetails = tags.length > 0 ? { tags } : {};
+      const createdDetails = b.autoCreated
+        ? { auto: true, testRunId: run!.runId, ...tagDetails }
+        : run
+          ? { testRunId: run.runId, ...tagDetails }
+          : tags.length > 0
+            ? tagDetails
+            : null;
+      for (const key of b.tagKeys ?? []) bugTagRows.push([bugId, id(`tag:${key}`), workspaceId, createdAt]);
       activity.push({
         key: `bug:${b.key}:created`, actor: reporter, actionCode: 'bug.created', entityType: 'bug',
         entityId: bugId, entityName: b.title, category: 'Bugs', details: createdDetails, at: createdAt,
@@ -377,6 +434,8 @@ export async function seedDemo(
         bugId, projectId, workspaceId, b.title, b.severity, b.status, b.description, b.stepsToReproduce,
         run?.runId ?? null, b.run ? id(`test_case:${b.run.testCaseKey}`) : null, run?.name ?? null, run?.gherkin ?? null,
         b.failedStep, people[reporter].id, people[reporter].name, b.autoCreated, createdAt, updatedAt, run ? 1 : null,
+        // Resolved at its seeded status change (specs/demo-seed); the bug_resolved_at check needs it.
+        RESOLVED_STATUSES.includes(b.status) ? updatedAt : null,
       ];
     });
     await insertRows(
@@ -386,9 +445,15 @@ export async function seedDemo(
         ['id', 'uuid'], ['project_id', 'uuid'], ['workspace_id', 'uuid'], ['title'], ['severity'], ['status'], ['description'],
         ['steps_to_reproduce'], ['test_run_id', 'uuid'], ['test_case_id', 'uuid'], ['test_case_name_snapshot'], ['gherkin_snapshot'],
         ['failed_step_snapshot'], ['reporter_id', 'uuid'], ['reporter_display_name'], ['auto_created', 'boolean'],
-        ['created_at', 'timestamptz'], ['updated_at', 'timestamptz'], ['attempt', 'integer'],
+        ['created_at', 'timestamptz'], ['updated_at', 'timestamptz'], ['attempt', 'integer'], ['resolved_at', 'timestamptz'],
       ],
       bugRows,
+    );
+    await insertRows(
+      tx,
+      'bug_tag',
+      [['bug_id', 'uuid'], ['tag_id', 'uuid'], ['workspace_id', 'uuid'], ['created_at', 'timestamptz']],
+      bugTagRows,
     );
 
     // Activity is inserted directly: log() always stamps now(), and history must be backdated.
@@ -417,6 +482,7 @@ export async function seedDemo(
         executions: EXECUTIONS.length,
         runs: runRows.length,
         bugs: bugRows.length,
+        tags: TAGS.length,
         activityEntries: activity.length,
       },
     };

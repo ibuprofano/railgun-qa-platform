@@ -1,6 +1,6 @@
 # ADR 0005: Real-time Updates and Background Jobs for v1
 
-**Status:** Accepted, amended by [ADR 0012](0012-execution-completion-and-sign-off.md) (execution completion, sign-off and test case eligibility) and [ADR 0018](0018-queue-library.md) (queue library: Graphile Worker)
+**Status:** Accepted, amended by [ADR 0012](0012-execution-completion-and-sign-off.md) (execution completion, sign-off and test case eligibility) [ADR 0018](0018-queue-library.md) (queue library: Graphile Worker) and [ADR 0024](0024-health-score-history.md) (the daily Health Score snapshot)
 **Date:** 2026-09-23
 **Amends:** [ADR 0001](0001-tech-stack.md) (Real-time and Background Jobs layers)
 

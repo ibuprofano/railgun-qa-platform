@@ -31,6 +31,17 @@ Plataforma web colaborativa para equipos de QA que centraliza la definición, or
 
 _Aún sin desplegar: la elección de hosting (Postgres, cómputo, almacenamiento y región; preguntas abiertas E1–E4 en [docs/open-questions.md](docs/open-questions.md)) sigue pendiente. Por ahora la aplicación se ejecuta en local siguiendo la sección 1.4._
 
+**Acceso para la revisión.** Por privado (onetimesecret) se envían una nota con:
+- las dos claves de Clerk de la aplicación de revisión (publicable `pk_test_…` y secreta `sk_test_…`)
+- el email y la contraseña del usuario de demostración
+
+Con eso, la revisión en local son cinco pasos. Requisitos: Node.js ≥ 22.18 y Docker en marcha.
+1. `npm install`
+2. `npm run setup`, y pegar las dos claves de Clerk cuando las pida. Lo demás lo hace solo (sección 1.4).
+3. `npm run dev`
+4. Abrir `http://localhost:3000` e iniciar sesión con el usuario de demostración. Si Clerk pide un código de verificación, es `424242`: el email de demostración es de prueba (`+clerk_test`), así que no llega ningún correo y ese código siempre vale.
+5. Cargar los datos de demostración: `npm run db:seed -w apps/api -- --email <email del usuario de demostración>`, y recargar la página.
+
 ### 0.5. URL o archivo comprimido del repositorio
 
 > Puedes tenerlo alojado en público o en privado, en cuyo caso deberás compartir los accesos de manera segura. Puedes enviarlos a [alvaro@lidr.co](mailto:alvaro@lidr.co) usando algún servicio como [onetimesecret](https://onetimesecret.com/). También puedes compartir por correo un archivo zip con el contenido
@@ -83,25 +94,46 @@ Ya funciona:
   - quitar runs de una ejecución en Draft, y añadir un caso de prueba a una ejecución en Draft existente
   - los cambios de entornos quedan registrados en el log de actividad
 - **Tiempo real:** las pantallas de ejecuciones se actualizan en vivo por *server-sent events*, y solo refrescan por sondeo si el stream no está disponible.
-- **Proyectos y workspace:** proyectos con selector, papelera y restauración, y renombrado del workspace.
-- **Jobs en segundo plano:** el worker de jobs (Graphile Worker) con la purga diaria de la papelera.
+- **Proyectos y workspace:**
+  - proyectos con selector, y renombrado del workspace
+  - **Project Settings › Environments:** alta, edición y borrado de entornos y sus credenciales, con revelado auditado de contraseñas
+- **Actividad y papelera** ([ADR 0022](docs/adr/0022-trash-restore.md)):
+  - la pantalla de Actividad, con el log del proyecto filtrable por tipo
+  - la pantalla de Papelera, con restauración y purga definitiva a los 30 días
+- **Dashboards** ([ADR 0023](docs/adr/0023-chart-rendering.md), [ADR 0024](docs/adr/0024-health-score-history.md), [ADR 0025](docs/adr/0025-test-case-health-and-edit-times.md)):
+  - **Overview:** Health Score con sus componentes, KPIs, tendencias por rango (7, 15, 30 o 90 días), los casos que más fallan y los bugs urgentes
+  - un dashboard en cada pantalla: **Test Cases** (salud de cada caso, Needs Attention, rankings y salud por carpeta), **Executions** y **Bugs**
+  - historial diario del Health Score, guardado por un job programado
+- **Reportes PDF** ([ADR 0026](docs/adr/0026-report-rendering-library-and-fonts.md), [ADR 0027](docs/adr/0027-report-storage-and-delivery.md)):
+  - se generan en segundo plano, con un estado «Generating…», y se descargan al terminar
+  - los dashboards de Bugs, Executions y Test Cases tienen su PDF, con las mismas cifras, rangos y filtros que la pantalla
+  - texto en japonés incluido (fuentes Noto)
+  - cada descarga queda en el log de actividad
+- **Jobs en segundo plano:** el worker (Graphile Worker) genera los reportes, guarda el snapshot diario del Health Score y purga la papelera.
 - **Datos de demostración:** un seed con un proyecto de ejemplo completo.
 
 Pendiente:
 - invitaciones y miembros (y el email que las envía)
 - adjuntos de imagen
-- la pantalla de Actividad y los dashboards
-- reportes PDF/HTML
+- el PDF del Overview y el reporte HTML/PDF de una ejecución
+- el almacenamiento de objetos (S3/R2): hoy los reportes se guardan en PostgreSQL
 - el grafo de trazabilidad
 - el motor automatizado
+- el despliegue
 
 ### **1.3. Diseño y experiencia de usuario:**
 
 > Proporciona imágenes y/o videotutorial mostrando la experiencia del usuario desde que aterriza en la aplicación, pasando por todas las funcionalidades principales.
 
-La aplicación ya es navegable en local. Tiene una barra lateral colapsable, un selector de proyecto, y pantallas en vista dividida (lista y detalle) para Test Cases, Executions y Bugs, con tema claro y oscuro. Para recorrerla con datos realistas, ejecuta el seed de demostración (sección 1.4, paso 6). Llena tu proyecto con el conjunto de datos «ShopFlow»: árbol de carpetas, ejecuciones en todos los estados, bugs y compañeros de equipo.
+La aplicación ya es navegable en local. Tiene una barra lateral colapsable, un selector de proyecto y tema claro y oscuro. Las pantallas son:
+- **Overview:** el dashboard del proyecto.
+- **Test Cases, Executions y Bugs:** vista dividida (lista y detalle), cada una con su propio dashboard y, en las tres, descarga del reporte PDF.
+- **Activity y Trash:** el log del proyecto y la papelera.
+- **Project Settings y Workspace Settings:** el nombre del proyecto, sus entornos y credenciales, y los proyectos del workspace.
 
-_Pendiente: capturas de pantalla y video walkthrough de los flujos principales (alta de caso de prueba, creación y ejecución de una Test Execution, gestión de un bug)._
+Para recorrerla con datos realistas, ejecuta el seed de demostración (sección 1.4, paso 4). Llena tu proyecto con el conjunto de datos «ShopFlow»: árbol de carpetas, ejecuciones en todos los estados, bugs, compañeros de equipo e historial con fechas pasadas.
+
+**Video del recorrido:** [QA Automation Platform - Google Chrome 2026-11-25 19-51-06.mp4](docs/captures/QA%20Automation%20Platform%20-%20Google%20Chrome%202026-11-25%2019-51-06.mp4) (52 MB, en [docs/captures/](docs/captures/)). GitHub no reproduce el video dentro de este documento: el enlace abre el fichero, que se puede descargar desde allí.
 
 ### **1.4. Instrucciones de instalación:**
 
@@ -122,36 +154,25 @@ Todos los comandos se ejecutan desde la raíz del repositorio. [CLAUDE.md](CLAUD
    cd railgun-qa-platform
    npm install
    ```
-2. **Levantar PostgreSQL:** `docker compose up -d`. Escucha en el puerto **5433** del host. En un volumen nuevo, `db/init/` crea los roles:
-   - `railgun_migrator`, dueño del esquema
-   - `railgun_app`, el rol de la API, sin bypass de RLS
-   - `railgun_worker`, el rol del worker
-   - `railgun_breakglass`, inactivo
+2. **Preparar el entorno:** `npm run setup`. Pide una sola vez las dos claves de Clerk (publicable y secreta, en el panel de Clerk › tu aplicación › API keys) y hace todo lo demás:
+   - comprueba Node y Docker
+   - levanta PostgreSQL (`docker compose up -d`, puerto **5433**) y espera a que existan sus roles (`db/init/`, [ADR 0003](docs/adr/0003-tenant-isolation.md)): `railgun_migrator`, dueño del esquema; `railgun_app`, el de la API, sin bypass de RLS; `railgun_worker`, el del worker; y `railgun_breakglass`, inactivo
+   - crea `apps/api/.env` y `apps/web/.env.local` con las claves de Clerk, y genera `SECRETS_MASTER_KEY` (32 bytes aleatorios). Nunca la reemplaza una vez creada, porque cifra las claves de cada workspace ([ADR 0004](docs/adr/0004-secrets-storage.md))
+   - instala el esquema de Graphile Worker, aplica `db/migrations/0001`–`0021` y comprueba que toda tabla con `workspace_id` tenga política RLS
+   - descarga las fuentes de los reportes (Noto Sans JP y Noto Sans Mono CJK JP, en `apps/worker/fonts/`, ignorada por git) y comprueba su SHA-256 ([ADR 0026](docs/adr/0026-report-rendering-library-and-fonts.md))
 
-   Ver [ADR 0003](docs/adr/0003-tenant-isolation.md).
-3. **Aplicar las migraciones**, con el rol migrador:
-   ```bash
-   DATABASE_URL=postgresql://railgun_migrator:migrator_dev_password@localhost:5433/railgun npm run db:migrate
-   DATABASE_URL=postgresql://postgres:postgres@localhost:5433/railgun npm run db:check-rls
-   ```
-   El primer comando instala el esquema de Graphile Worker y aplica `db/migrations/0001`–`0015`. El segundo comprueba que toda tabla con `workspace_id` tenga política RLS.
-4. **Configurar las variables de entorno:**
-   - **API:** copia `apps/api/.env.example` a `apps/api/.env` y rellena:
-     - `CLERK_SECRET_KEY`
-     - `SECRETS_MASTER_KEY`: 32 bytes en base64, por ejemplo `openssl rand -base64 32`. Consérvala, porque cifra las claves de cada workspace ([ADR 0004](docs/adr/0004-secrets-storage.md)).
-   - **Web:** crea `apps/web/.env.local` con `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` y la misma `CLERK_SECRET_KEY`.
-   - Las cadenas de conexión (`DATABASE_URL`, `WORKER_DATABASE_URL`), `NEXT_PUBLIC_API_URL` y `WEB_ORIGIN` son opcionales: por defecto apuntan al Postgres de docker-compose y a los puertos locales.
-5. **Arrancar todo:** `npm run dev` levanta la API (`localhost:3001`), la web (`localhost:3000`) y el worker en una sola terminal. Ctrl+C los detiene.
-6. **Registrarse y cargar datos de demostración:** crea una cuenta en `http://localhost:3000`. El primer login crea tu workspace y tu proyecto. Después ejecuta:
+   Se puede repetir sin riesgo: no sobrescribe ningún valor ya puesto y se salta lo ya hecho. Solo migra una base de datos vacía; en una ya migrada, las migraciones nuevas se aplican una a una (ver [CLAUDE.md](CLAUDE.md), «Existing dev databases»). Las demás variables (`DATABASE_URL`, `WORKER_DATABASE_URL`, `NEXT_PUBLIC_API_URL`, `WEB_ORIGIN`) son opcionales: por defecto apuntan al Postgres de docker-compose y a los puertos locales.
+3. **Arrancar todo:** `npm run dev` levanta la API (`localhost:3001`), la web (`localhost:3000`) y el worker en una sola terminal. Ctrl+C los detiene.
+4. **Registrarse y cargar datos de demostración (opcional):** crea una cuenta en `http://localhost:3000`. El primer login crea tu workspace y tu proyecto. Después ejecuta:
    ```bash
    npm run db:seed -w apps/api -- --email tu@email.com
    ```
    El seed es idempotente: volver a ejecutarlo no escribe nada.
-7. **Calidad:**
+5. **Calidad:**
    - `npm run lint` y `npm run typecheck`
-   - `npm test -w apps/api`, `npm test -w apps/worker` y `npm test -w apps/web`
+   - `npm test -w apps/api`, `npm test -w apps/worker`, `npm test -w apps/web` y `npm test -w packages/reporting`
 
-   Los tests de la API y del worker usan el Postgres de docker-compose.
+   Los tests de la API y del worker usan el Postgres de docker-compose. Los de la API necesitan además `SECRETS_MASTER_KEY` en la shell, porque los tests no leen `.env`.
 
 ---
 
@@ -170,6 +191,11 @@ Durante la implementación se añadieron:
 - [0011](docs/adr/0011-frontend-ui-stack.md): Tailwind, shadcn/ui, TanStack Query y react-hook-form
 - [0012](docs/adr/0012-execution-completion-and-sign-off.md) a [0017](docs/adr/0017-active-project.md): reglas de dominio
 - [0018](docs/adr/0018-queue-library.md): Graphile Worker como cola
+- [0019](docs/adr/0019-execution-cancel.md) a [0022](docs/adr/0022-trash-restore.md): Cancel, Try Again, historial y restauración desde la papelera
+- [0023](docs/adr/0023-chart-rendering.md): gráficos SVG propios, dibujados una vez para la pantalla y el PDF
+- [0024](docs/adr/0024-health-score-history.md) y [0025](docs/adr/0025-test-case-health-and-edit-times.md): historial del Health Score y salud de los casos de prueba
+- [0026](docs/adr/0026-report-rendering-library-and-fonts.md): pdfmake y fuentes Noto para los reportes, tras un spike comparativo
+- [0027](docs/adr/0027-report-storage-and-delivery.md): almacenamiento y entrega de reportes
 
 Este apartado resume el estado actual.
 
@@ -219,7 +245,7 @@ flowchart TB
 - **No hay Redis ni WebSockets en v1**: las notificaciones en tiempo real son *server-sent events* (una sola dirección, servidor → navegador) y la cola de jobs vive en PostgreSQL, con lo que un job se encola en la misma transacción que el cambio que lo origina. Redis (pub/sub) y la evaluación de Temporal vuelven cuando se retome el motor de automatización (ADR 0005).
 - Clerk solo gestiona **identidad**. Workspaces, membresías, roles e invitaciones viven en nuestra base de datos (ADR 0002).
 - El navegador llama a la API directamente y envía el token de sesión de Clerk como `Authorization: Bearer`. El stream SSE usa el mismo token, mediante un cliente basado en `fetch` ([ADR 0009](docs/adr/0009-api-authentication-transport.md)).
-- **Estado actual:** la web, la API, el worker y PostgreSQL ya existen y funcionan en local. Todavía no existen el almacenamiento de objetos, el email, KMS, el motor Playwright ni el hosting. El tiempo real por SSE ya funciona: un stream por proyecto, alimentado por `LISTEN/NOTIFY` de PostgreSQL.
+- **Estado actual:** la web, la API, el worker y PostgreSQL ya existen y funcionan en local. Todavía no existen el almacenamiento de objetos, el email, KMS, el motor Playwright ni el hosting. El tiempo real por SSE ya funciona: un stream por proyecto, alimentado por `LISTEN/NOTIFY` de PostgreSQL. El worker ya genera reportes, el snapshot diario del Health Score y la purga de la papelera. Mientras no haya almacenamiento de objetos, cada PDF se guarda en PostgreSQL (`report_file`) y la API lo entrega solo a quien lo pidió ([ADR 0027](docs/adr/0027-report-storage-and-delivery.md)).
 
 **Patrón y justificación:** el backend sigue un patrón de **monolito modular** (NestJS, organizado por dominio: workspaces, proyectos, casos de prueba, ejecuciones, bugs, actividad) con un **worker desacoplado** que consume una cola en PostgreSQL para el trabajo asíncrono (emails, reportes, jobs programados). El frontend (Next.js) es un cliente independiente que consume la API por REST y SSE.
 
@@ -231,7 +257,7 @@ No se optó por microservicios: dado el estado inicial del producto y el tamaño
 - El monolito deberá descomponerse eventualmente si el equipo crece de forma significativa.
 - Se prioriza la velocidad de entrega (Vercel + Railway/Render) sobre el control total de infraestructura de un único proveedor cloud (alternativa «Combo C» del ADR 0001).
 - La cola en PostgreSQL tiene un techo de rendimiento muy superior a lo que v1 necesita, pero inferior al de un broker dedicado.
-- Los reportes se generan sin navegador (biblioteca PDF), lo que exige mantener dos plantillas (HTML y PDF) y resolver la cobertura de fuentes para texto no latino (ADR 0006).
+- Los reportes se generan sin navegador (pdfmake), lo que exigirá mantener dos plantillas cuando llegue el reporte HTML. La cobertura de texto no latino se resolvió con fuentes Noto incrustadas en subconjunto ([ADR 0026](docs/adr/0026-report-rendering-library-and-fonts.md)).
 - La clave maestra de cifrado vive en el almacén de secretos de la plataforma hasta que se adopte KMS (ADR 0004).
 
 ### **2.2. Descripción de componentes principales:**
@@ -247,11 +273,11 @@ No se optó por microservicios: dado el estado inicial del producto y el tamaño
 | Membresías e invitaciones | Módulo propio de NestJS sobre PostgreSQL | Workspaces, roles de workspace y de proyecto, invitaciones (aceptación explícita, 7 días de vigencia), transferencia de propiedad |
 | Tiempo real | Server-sent events (SSE) | Refresco de estadísticas y runs cuando otro tester actualiza una ejecución; notificación de invitaciones y de reportes listos. El temporizador de la ejecución se calcula en el navegador |
 | Cola / Jobs | Cola sobre PostgreSQL (Graphile Worker) en un proceso worker; los jobs se encolan en la misma transacción que el cambio que los origina | Emails, generación de reportes, snapshot diario del Health Score, purga de la papelera a los 30 días, limpieza de adjuntos huérfanos ([ADR 0005](docs/adr/0005-realtime-and-background-jobs-v1.md), [ADR 0018](docs/adr/0018-queue-library.md)) |
-| Reportes | Plantilla HTML en servidor + biblioteca PDF (pdfmake por defecto, pendiente de spike) | Reportes HTML autocontenidos y PDF a partir de un único objeto de datos, con gráficos SVG dibujados una sola vez ([ADR 0006](docs/adr/0006-report-generation.md)) |
+| Reportes | pdfmake con fuentes Noto, en un hilo del worker con límite de 30 s ([ADR 0026](docs/adr/0026-report-rendering-library-and-fonts.md)); `packages/reporting` para los datos y los gráficos | PDF de los dashboards a partir de un único objeto de datos, con las mismas reglas que la pantalla y gráficos SVG dibujados una sola vez ([ADR 0006](docs/adr/0006-report-generation.md), [ADR 0023](docs/adr/0023-chart-rendering.md)). El reporte HTML llegará con el de ejecución |
 | Secretos | Cifrado de sobre AES-256-GCM en la aplicación | Credenciales de entorno, tokens de integración y claves de IA; clave por workspace envuelta por una clave maestra ([ADR 0004](docs/adr/0004-secrets-storage.md)) |
 | Email transaccional | Proveedor pendiente de decidir | Invitaciones y recordatorios |
 | Motor de automatización (roadmap) | Worker Node.js + Playwright | Ejecución automatizada de casos Gherkin. Su runtime (Temporal, Redis pub/sub) se decide cuando se retome |
-| Almacenamiento de objetos | AWS S3 o Cloudflare R2 (pendiente) | Adjuntos de bugs y reportes generados, en bucket privado con URLs firmadas de vida corta |
+| Almacenamiento de objetos | AWS S3 o Cloudflare R2 (pendiente) | Adjuntos de bugs y reportes generados, en bucket privado con URLs firmadas de vida corta. Hasta entonces, los reportes se guardan en PostgreSQL y caducan a los 7 días ([ADR 0027](docs/adr/0027-report-storage-and-delivery.md)) |
 | Hosting | Vercel (frontend) + Railway o Render (API, worker) + PostgreSQL gestionado (Neon o RDS), pendientes de decidir | Despliegue y ejecución de todos los servicios |
 
 ### **2.3. Descripción de alto nivel del proyecto y estructura de ficheros**
@@ -262,33 +288,33 @@ Monorepo con **npm workspaces** ([ADR 0010](docs/adr/0010-monorepo-layout.md)): 
 
 ```
 railgun-qa-platform/
-├── .github/workflows/        # CI: lint, typecheck, migraciones y chequeo de RLS
+├── .github/workflows/        # CI: lint, typecheck, fuentes de reportes, migraciones y chequeo de RLS
 ├── .claude/                  # Comandos /opsx:* de OpenSpec para Claude Code
 ├── apps/
 │   ├── api/                  # NestJS — API REST
 │   │   ├── src/common/       # Guards (Clerk, rol de proyecto, owner), withTenantContext, ActivityLogger, cifrado de secretos
-│   │   ├── src/<dominio>/    # Un módulo por dominio: projects, folders, test-cases, tags, executions, bugs, environments, workspace, me, realtime
+│   │   ├── src/<dominio>/    # Un módulo por dominio: projects, folders, test-cases, tags, executions, bugs, environments, workspace, me, realtime, activity, trash, overview, health, reports
 │   │   ├── scripts/seed.ts   # Seed de demostración (ShopFlow)
 │   │   └── test/             # Tests e2e contra Postgres real, incluido el arnés de aislamiento entre tenants
 │   ├── web/                  # Next.js (App Router)
-│   │   ├── app/(app)/        # Rutas autenticadas: test-cases, executions, bugs, settings, workspace-settings
+│   │   ├── app/(app)/        # Rutas autenticadas: overview, test-cases, executions, bugs, activity, trash, settings, workspace-settings
 │   │   ├── components/       # Pantallas y componentes (shadcn/ui en components/ui)
 │   │   └── lib/              # Cliente de API, query keys de TanStack Query, permisos por rol, utilidades
-│   └── worker/               # Graphile Worker: tareas (trash_purge), crontab y helper de contexto de tenant
+│   └── worker/               # Graphile Worker: tareas (trash_purge, health_snapshot, report_generate), crontab, render de PDF y contexto de tenant
 ├── packages/
 │   ├── config/               # tsconfig y ESLint compartidos
 │   ├── shared-types/         # Reservado para tipos compartidos (vacío por ahora)
-│   └── reporting/            # Reservado para gráficos y reportes (vacío por ahora)
+│   └── reporting/            # Métricas de los dashboards, Health Score, gráficos SVG y datos de cada reporte, compartidos por la API, el worker y la web
 ├── db/
 │   ├── init/                 # Roles de base de datos (superusuario, una vez)
-│   └── migrations/           # 0001–0015, cada una con .up.sql y .down.sql
+│   └── migrations/           # 0001–0021, cada una con .up.sql y .down.sql
 ├── prisma/schema.prisma      # Solo datasource y generator; el esquema vive en db/migrations
 ├── scripts/                  # Migraciones, instalación de la cola, chequeo de RLS, `npm run dev`
 ├── openspec/
-│   ├── specs/                # Especificaciones vigentes por capacidad (26)
+│   ├── specs/                # Especificaciones vigentes por capacidad (41)
 │   └── changes/              # Cambios en curso y archivo de cambios completados
 ├── docs/
-│   ├── adr/                  # ADR 0001–0021
+│   ├── adr/                  # ADR 0001–0027
 │   ├── open-questions.md     # Decisiones aún abiertas
 │   ├── roadmap-mvp.md        # Orden de construcción del MVP (completado)
 │   └── roadmap-full.md       # Orden de construcción del producto completo
@@ -317,9 +343,10 @@ La infraestructura reutiliza el diagrama de la sección 2.1: **Vercel** aloja el
 **Integración continua (ya en marcha):** GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) se ejecuta en cada push y en cada PR. El workflow sigue estos pasos:
 1. Levanta un servicio PostgreSQL 16 y usa Node 22.
 2. Instala dependencias, y ejecuta `npm run lint` y `npm run typecheck` en todos los workspaces.
-3. Crea los roles de base de datos (`db/init`).
-4. Aplica todas las migraciones con el rol migrador, igual que el despliegue previsto.
-5. Ejecuta `npm run db:check-rls`, que falla si una tabla con `workspace_id` no tiene política RLS forzada (ADR 0003).
+3. Descarga las fuentes de los reportes y comprueba su SHA-256 (`npm run fonts -w apps/worker`).
+4. Crea los roles de base de datos (`db/init`).
+5. Aplica todas las migraciones con el rol migrador, igual que el despliegue previsto.
+6. Ejecuta `npm run db:check-rls`, que falla si una tabla con `workspace_id` no tiene política RLS forzada (ADR 0003).
 
 Las suites de Jest y Vitest (sección 2.6) se ejecutan en local; incorporarlas al CI está pendiente.
 
@@ -352,11 +379,16 @@ _El despliegue continuo, los entornos de staging y la observabilidad (logs, erro
   - El token y el rol se comprueban al abrir el stream, y el workspace en cada evento.
   - El stream se cierra a los 5 minutos para volver a validar el acceso.
   - Los eventos solo llevan identificadores, nunca datos.
+- **Reportes** ([ADR 0027](docs/adr/0027-report-storage-and-delivery.md)):
+  - se construyen desde un objeto de datos con lista blanca de campos, sin secretos ni elementos de la papelera
+  - las opciones de cada petición se validan por tipo de reporte antes de crear nada (`400`)
+  - el render no descarga recursos remotos y tiene un límite de 30 s
+  - solo quien pidió el reporte puede verlo y descargarlo; caduca a los 7 días y cada descarga queda en el log de actividad
 
 **Pendiente, ligado a funciones aún no construidas:**
 - invitaciones
-- URLs firmadas (adjuntos)
-- reportes seguros
+- URLs firmadas (adjuntos, y reportes cuando pasen al almacenamiento de objetos)
+- el escapado del reporte HTML, que aún no existe
 - HTTPS, que llega con el hosting
 
 **Límites conocidos:** quien obtenga el entorno de la aplicación obtiene también la clave maestra (hasta adoptar KMS), un Contributor puede revelar contraseñas de entorno por diseño (por eso se auditan en lugar de impedirse), y un superusuario de la base de datos podría alterar el log de actividad.
@@ -365,9 +397,9 @@ _El despliegue continuo, los entornos de staging y la observabilidad (logs, erro
 
 > Describe brevemente algunos de los tests realizados
 
-Cada cambio de OpenSpec incluye sus propios tests en sus tareas, y una tarea solo se marca como hecha cuando su verificación pasa. A la fecha de la entrega final hay unos 100 ficheros de test:
+Cada cambio de OpenSpec incluye sus propios tests en sus tareas, y una tarea solo se marca como hecha cuando su verificación pasa. A la fecha de la entrega final hay 145 ficheros de test y unos 1.380 tests:
 
-- **API: 47 ficheros, Jest + Supertest.** Se dividen en tests unitarios de reglas de dominio y tests e2e que levantan el `AppModule` real contra el PostgreSQL de docker-compose. Solo se simula la verificación del token de Clerk.
+- **API: 60 ficheros y 574 tests, Jest + Supertest.** Se dividen en tests unitarios de reglas de dominio y tests e2e que levantan el `AppModule` real contra el PostgreSQL de docker-compose. Solo se simula la verificación del token de Clerk.
   - **Unitarios:** la máquina de estados de ejecuciones, las reglas de bugs y de proyectos, el orden fraccionario, el cifrado y los guards.
   - **Aislamiento entre tenants** (`tenant-isolation.e2e-spec.ts` y un arnés reutilizable): para cada tabla de tenant, las lecturas en el contexto del workspace A no ven datos del workspace B, una escritura cruzada se rechaza, y sin contexto de tenant se obtienen cero filas.
   - **Integridad:** el log de actividad sobrevive al borrado de entidades. Los secretos se guardan solo cifrados, y cada revelado escribe su entrada de auditoría en la misma transacción.
@@ -375,11 +407,19 @@ Cada cambio de OpenSpec incluye sus propios tests en sus tareas, y una tarea sol
   - **Cancel y Restart:** el historial de intentos, los runs descartados y un bug automático por intento.
   - **Historial:** la paginación del historial y su alcance (la ejecución, sus runs y sus bugs).
   - **Tiempo real:** un evento por cambio confirmado, y ninguno si la transacción se revierte.
-- **Worker: 5 ficheros, Jest.** Cubren el contexto de tenant, el crontab, el cierre ordenado, el encolado transaccional por la lista blanca (`enqueue_job`) y la purga de la papelera: plazo de 30 días, orden de dependencias, entrada de actividad del sistema e idempotencia.
-- **Web: 49 ficheros, Vitest + React Testing Library.** Cubren:
+  - **Dashboards:** cada cifra de los cuatro dashboards contra datos sembrados, incluido que lo que está en la papelera no cuente.
+  - **Reportes:** la validación de las opciones de cada tipo (`400` sin crear nada), que solo quien lo pidió lo vea, la caducidad y la entrada de actividad de cada descarga.
+- **Worker: 8 ficheros y 50 tests, Jest.** Cubren el contexto de tenant, el crontab, el cierre ordenado y el encolado transaccional por la lista blanca (`enqueue_job`), además de:
+  - la purga de la papelera: plazo de 30 días, orden de dependencias, entrada de actividad del sistema e idempotencia
+  - el snapshot diario del Health Score
+  - la generación de reportes: reintentos, fallo tras el último intento, el límite de 30 s, que el PDF de cada tipo coincida con las cifras del dashboard, y que no se descarguen recursos remotos
+- **`packages/reporting`: 13 ficheros y 126 tests, Vitest.** Las fórmulas del Health Score, las reglas de salud de los casos de prueba, las métricas de cada dashboard, la geometría de los gráficos y los datos de cada reporte.
+- **Web: 64 ficheros y 629 tests, Vitest + React Testing Library.** Cubren:
   - el árbol de carpetas con drag-and-drop
   - el detalle de ejecución: temporizador, acciones por rol, Cancel y Try Again, historial
   - el cliente SSE y su reconexión
+  - los dashboards, sus rangos y filtros, y la descarga de reportes con sus estados Generating y fallo
+  - Project Settings › Environments, incluido que una contraseña revelada nunca entre en la caché
   - los modales de alta
   - los filtros por etiqueta
   - la protección de rutas
@@ -389,7 +429,7 @@ Cada cambio de OpenSpec incluye sus propios tests en sus tareas, y una tarea sol
 Pendiente:
 - tests end-to-end de navegador con Playwright para los recorridos críticos
 - un test explícito de que el log de actividad rechaza `UPDATE` y `DELETE`
-- ejecutar las suites en CI
+- ejecutar las suites en CI (hoy se ejecutan en local; el test de job de `trash_purge` del worker falla de forma intermitente, aproximadamente una vez de cada tres)
 
 ---
 
@@ -401,18 +441,22 @@ Pendiente:
 
 Este modelo refleja el [PRD v1.1](PRD.md) y los ADR [0002](docs/adr/0002-authentication-and-workspace-membership.md) (identidad y membresías), [0003](docs/adr/0003-tenant-isolation.md) (aislamiento por tenant), [0004](docs/adr/0004-secrets-storage.md) (secretos), [0006](docs/adr/0006-report-generation.md) (reportes) y [0007](docs/adr/0007-activity-log-and-trash-purge.md) (log de actividad y papelera). Toda tabla de tenant lleva `workspace_id` y las de papelera llevan `deleted_by`: ambas son claves foráneas (a `WORKSPACE` y a `USER`) que **no se dibujan como líneas** para no saturar el diagrama, pero sí figuran en cada entidad. `ACTIVITY_ENTRY` no tiene relaciones a propósito: no usa claves foráneas.
 
-> **Estado de la implementación (entrega final):** el diagrama describe el modelo objetivo del producto completo. Las migraciones `0001`–`0015` ya crean:
+> **Estado de la implementación (entrega final):** el diagrama describe el modelo objetivo del producto completo. Las migraciones `0001`–`0021` ya crean:
 > - `workspace`, `user`, `workspace_membership`, `workspace_dek` (la `WORKSPACE_KEY` del diagrama) y `project`, con `user.last_project_id` para el proyecto activo ([ADR 0017](docs/adr/0017-active-project.md))
 > - `project_membership`, `folder`, `test_case`, `tag`, `test_case_tag` y `bug_tag`
 > - `environment`, `environment_credential`, `test_execution`, `test_run`, `test_run_attempt` y `bug`
 > - `activity_entries`
+> - `health_snapshot` (el `HEALTH_SCORE_SNAPSHOT` del diagrama), `report` y `report_file`
 >
-> Difieren del diagrama en tres puntos:
+> Difieren del diagrama en estos puntos:
 > - El árbol de carpetas admite **4** niveles (enmienda del PRD §2.3).
 > - Un run guarda su resultado (`outcome`) y sus snapshots. Los intentos anteriores se guardan en `test_run_attempt` al hacer Restart ([ADR 0020](docs/adr/0020-execution-try-again.md)). Todavía no hay `TestRunStep`, y el paso fallido se guarda en el bug (`failed_step_snapshot`).
 > - El orden de carpetas y casos usa claves fraccionarias. Los runs usan una posición entera que se renumera al reordenar ([ADR 0014](docs/adr/0014-drag-and-drop-and-ordering.md)).
+> - `health_snapshot` tiene clave primaria `(project_id, day)` y guarda cada componente del Health Score en su propia columna, no en un `jsonb` ([ADR 0024](docs/adr/0024-health-score-history.md)).
+> - `report` no tiene `storage_key`: el PDF se guarda en `report_file` (PostgreSQL) hasta que exista el almacenamiento de objetos, y caduca a los 7 días. Su `kind` admite hoy los dashboards de Bugs, Executions y Test Cases ([ADR 0027](docs/adr/0027-report-storage-and-delivery.md)).
+> - `bug.resolved_at`, y `test_case.updated_at` y `script_updated_at`, alimentan los dashboards: el tiempo de resolución y las reglas de salud de los casos ([ADR 0025](docs/adr/0025-test-case-health-and-edit-times.md)).
 >
-> Aún no existen `INVITATION`, `PROJECT_SETTINGS`, `BUG_IMAGE`, `HEALTH_SCORE_SNAPSHOT` ni `REPORT`.
+> Aún no existen `INVITATION`, `PROJECT_SETTINGS` ni `BUG_IMAGE`.
 
 ```mermaid
 erDiagram
@@ -1329,7 +1373,7 @@ Los tres tickets forman un **corte vertical del ciclo de vida de una ejecución*
 **Cómo se organiza el trabajo:**
 - **La unidad de trabajo es un cambio de [OpenSpec](https://github.com/Fission-AI/OpenSpec)**, no una PR. Cada uno tiene propuesta, especificación delta, diseño y tareas verificables, y se crea, implementa y archiva con `/opsx:propose`, `/opsx:apply` y `/opsx:archive`.
 - **Cada entrega se publica en el curso como una PR** desde su rama `feature/entrega-N-gr`.
-- **Los cambios archivados** (`openspec/changes/archive/`, 23 a la fecha) son el registro de lo construido, con el mismo nivel de detalle que una PR.
+- **Los cambios archivados** (`openspec/changes/archive/`, 38 a la fecha) son el registro de lo construido, con el mismo nivel de detalle que una PR.
 
 Estos son tres representativos, uno por capa:
 

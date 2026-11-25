@@ -1,4 +1,4 @@
-// Starts the API and web dev servers and the background worker together (`npm run dev`
+// Starts the API and web dev servers, the background worker and the reporting package's watch build together (`npm run dev`
 // from finalproject-GR), prefixing each line of output with its app. Ctrl+C, or any of
 // them exiting, stops the rest. Plain Node instead of a `concurrently` dependency, same posture as the other
 // scripts here. Postgres (docker compose up -d) is not started by this.
@@ -10,6 +10,8 @@ const apps = [
   { name: 'api', workspace: 'apps/api', color: '\x1b[36m' },
   { name: 'web', workspace: 'apps/web', color: '\x1b[35m' },
   { name: 'worker', workspace: 'apps/worker', color: '\x1b[33m' },
+  // Rebuilds packages/reporting's dist/ on change, so the apps pick up edits (ADR 0023).
+  { name: 'reporting', workspace: 'packages/reporting', color: '\x1b[32m' },
 ];
 const reset = '\x1b[0m';
 

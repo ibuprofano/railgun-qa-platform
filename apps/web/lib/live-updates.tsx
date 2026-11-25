@@ -5,6 +5,7 @@ import { useAuth } from '@clerk/nextjs';
 import { useQueryClient } from '@tanstack/react-query';
 import { API_BASE_URL } from './api-client';
 import { bugKeys } from './bugs-api';
+import { reportKeys } from './reports-api';
 import { activityKeys } from './activity-api';
 import { executionKeys } from './executions-api';
 import { useSessionContext } from './session-context';
@@ -127,7 +128,7 @@ export function LiveUpdatesProvider({ projectId, children }: { projectId: string
         repair();
         return;
       }
-      let payload: { executionId?: string; runId?: string };
+      let payload: { executionId?: string; runId?: string; reportId?: string };
       try {
         payload = JSON.parse(data);
       } catch {
@@ -136,6 +137,9 @@ export function LiveUpdatesProvider({ projectId, children }: { projectId: string
       if (event === 'execution.changed' && payload.executionId) {
         void queryClient.invalidateQueries({ queryKey: executionKeys.list(projectId), exact: true });
         void queryClient.invalidateQueries({ queryKey: executionKeys.detail(projectId, payload.executionId) });
+      } else if (event === 'report.changed' && payload.reportId) {
+        // A requested report started, finished or failed (report-pipeline): refetch its status.
+        void queryClient.invalidateQueries({ queryKey: reportKeys.detail(projectId, payload.reportId) });
       } else if (event === 'run.bugs.changed' && payload.runId) {
         void queryClient.invalidateQueries({ queryKey: bugKeys.forRun(projectId, payload.runId) });
         // The execution's history includes its runs' bugs (ADR 0021 decision 1).

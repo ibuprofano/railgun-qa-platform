@@ -79,6 +79,22 @@ describe('Shell', () => {
     }
   });
 
+  it('offers Trash, with an icon, to Admins only, after Project Settings', () => {
+    mockSession({ data: { ...viewer, role: 'Admin' } });
+    const { unmount } = renderShell();
+    const links = screen.getAllByRole('link').map((link) => link.textContent);
+    expect(links.indexOf('Trash')).toBe(links.indexOf('Project Settings') + 1);
+    expect(screen.getByRole('link', { name: 'Trash' }).querySelector('svg')).not.toBeNull();
+    unmount();
+
+    for (const role of ['Viewer', 'Contributor'] as const) {
+      mockSession({ data: { ...viewer, role } });
+      const view = renderShell();
+      expect(screen.queryByRole('link', { name: 'Trash' })).toBeNull();
+      view.unmount();
+    }
+  });
+
   it('shows the access-denied state when role resolves to null', () => {
     mockSession({ data: { ...viewer, role: null } });
     renderShell();
@@ -104,7 +120,7 @@ describe('Shell', () => {
     mockSession({ data: viewer });
     renderShell();
 
-    for (const name of ['Test Cases', 'Executions', 'Bugs']) {
+    for (const name of ['Test Cases', 'Executions', 'Bugs', 'Activity']) {
       const link = screen.getByRole('link', { name });
       expect(link.querySelector('svg')).not.toBeNull();
     }
@@ -120,6 +136,30 @@ describe('Shell', () => {
     const bugs = screen.getByRole('link', { name: 'Bugs' });
     expect(bugs.getAttribute('href')).toBe('/bugs');
     expect(bugs.getAttribute('aria-current')).toBe('page');
+  });
+
+  it('starts the navigation with Overview, marked current on the Overview screen', () => {
+    pathname.mockReturnValue('/overview');
+    mockSession({ data: viewer });
+    renderShell();
+
+    const nav = ['Overview', 'Test Cases', 'Executions', 'Bugs', 'Activity'];
+    const links = screen.getAllByRole('link').map((link) => link.textContent).filter((text) => nav.includes(text ?? ''));
+    expect(links).toEqual(nav);
+    const overview = screen.getByRole('link', { name: 'Overview' });
+    expect(overview.getAttribute('href')).toBe('/overview');
+    expect(overview.getAttribute('aria-current')).toBe('page');
+    expect(overview.querySelector('svg')).not.toBeNull();
+  });
+
+  it('offers Activity to a Viewer and marks it current on the Activity screen', () => {
+    pathname.mockReturnValue('/activity');
+    mockSession({ data: viewer });
+    renderShell();
+
+    const activity = screen.getByRole('link', { name: 'Activity' });
+    expect(activity.getAttribute('href')).toBe('/activity');
+    expect(activity.getAttribute('aria-current')).toBe('page');
   });
 
   it('collapses to the icon rail, remembering the choice in the sidebar_state cookie', () => {

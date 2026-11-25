@@ -30,7 +30,7 @@ describe('emitLiveEvent (live-updates: events only when the change commits)', ()
     const sent = event();
     await withTenantContext(prisma, sent.workspaceId, (tx) => emitLiveEvent(tx, sent));
 
-    const received = (await listener.take()).filter((e) => e.executionId === sent.executionId);
+    const received = (await listener.take()).filter((e) => 'executionId' in e && e.executionId === sent.executionId);
     expect(received).toEqual([sent]);
   });
 
@@ -43,7 +43,7 @@ describe('emitLiveEvent (live-updates: events only when the change commits)', ()
       }),
     ).rejects.toThrow('refused');
 
-    const received = (await listener.take()).filter((e) => e.executionId === sent.executionId);
+    const received = (await listener.take()).filter((e) => 'executionId' in e && e.executionId === sent.executionId);
     expect(received).toEqual([]);
   });
 
@@ -55,5 +55,12 @@ describe('emitLiveEvent (live-updates: events only when the change commits)', ()
       parseLiveEvent(JSON.stringify({ type: 'run.bugs.changed', workspaceId: 'w', projectId: 'p', executionId: 'e' })),
     ).toBeNull();
     expect(parseLiveEvent(JSON.stringify({ type: 'other', workspaceId: 'w', projectId: 'p', executionId: 'e' }))).toBeNull();
+  });
+
+  it('parseLiveEvent accepts report.changed with its report id, and nothing else (report-pipeline)', () => {
+    const event = { type: 'report.changed', workspaceId: 'w', projectId: 'p', reportId: 'r' };
+    expect(parseLiveEvent(JSON.stringify(event))).toEqual(event);
+    expect(parseLiveEvent(JSON.stringify({ type: 'report.changed', workspaceId: 'w', projectId: 'p' }))).toBeNull();
+    expect(parseLiveEvent(JSON.stringify({ type: 'report.changed', workspaceId: 'w', projectId: 'p', executionId: 'e' }))).toBeNull();
   });
 });

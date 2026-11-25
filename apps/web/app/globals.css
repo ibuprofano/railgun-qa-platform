@@ -108,6 +108,14 @@
     --sev-medium: oklch(0.78 0.16 80);
     --sev-low: oklch(0.65 0.13 235);
     --live: oklch(0.51 0.23 277);
+    /* Execution status colours (PRD §6.3.6), used by the Executions dashboard's donut. */
+    --status-draft: oklch(0.6 0.01 260);
+    --status-ready: oklch(0.66 0.16 150);
+    --status-in-progress: oklch(0.58 0.15 250);
+    --status-paused: oklch(0.75 0.15 75);
+    --status-completed: oklch(0.48 0.12 155);
+    --status-done: oklch(0.78 0.01 260);
+    --status-canceled: oklch(0.66 0.09 25);
     /* Tag palette (ADR 0016). */
     --tag-gray: oklch(0.55 0.02 260);
     --tag-red: oklch(0.55 0.2 27);
@@ -160,6 +168,14 @@
     --sev-medium: oklch(0.82 0.14 85);
     --sev-low: oklch(0.72 0.12 235);
     --live: oklch(0.68 0.19 277);
+    /* Execution status colours (PRD §6.3.6), used by the Executions dashboard's donut. */
+    --status-draft: oklch(0.7 0.01 260);
+    --status-ready: oklch(0.74 0.15 150);
+    --status-in-progress: oklch(0.72 0.13 250);
+    --status-paused: oklch(0.8 0.14 80);
+    --status-completed: oklch(0.6 0.12 155);
+    --status-done: oklch(0.5 0.01 260);
+    --status-canceled: oklch(0.6 0.08 25);
     /* Tag palette (ADR 0016). */
     --tag-gray: oklch(0.75 0.02 260);
     --tag-red: oklch(0.72 0.17 25);

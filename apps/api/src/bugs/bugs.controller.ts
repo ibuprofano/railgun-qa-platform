@@ -22,13 +22,15 @@ import { resolveProjectWorkspaceId } from '../common/resolve-project-workspace';
 import type { AuthenticatedRequest } from '../common/clerk-auth.guard';
 import { isUuid } from '../executions/execution-input';
 import { type ExecutionActor, loadActorDisplayName } from '../executions/execution-queries';
-import { type BugSeverity, type BugStatus, failedStepOf, parseBugCreate, parseBugUpdate } from './bug-rules';
+import { type BugSeverity, type BugStatus, failedStepOf, isResolvedStatus, parseBugCreate, parseBugUpdate } from './bug-rules';
 import { type BugResponse, linkedRunOf, listBugs, loadBug, loadStartedRun, logBugActivity } from './bug-queries';
 import { projectTags, setItemTags } from '../tags/tag-queries';
 import { emitRunBugsChanged } from '../realtime/live-event';
 import { listBugHistory } from '../common/activity-log-reader';
 import { type ActivityHistoryResponse, parseHistoryCursor, toHistoryResponse } from '../common/activity-history';
 import type { Prisma } from '@prisma/client';
+import type { BugDashboardData } from '@railgun-qa/reporting';
+import { loadBugDashboard } from './bug-dashboard';
 
 /** Tells open streams that a run's linked bugs changed, when the bug has a run (specs/live-updates). */
 async function announceLinkedRun(tx: Prisma.TransactionClient, actor: ExecutionActor, bugId: string): Promise<void> {
@@ -115,6 +117,22 @@ export class BugsController {
     return withTenantContext(this.prisma, workspaceId, (tx) => listBugs(tx, projectId, testRunId ?? null));
   }
 
+  /**
+   * The Bugs dashboard's rows (specs/bug-metrics). Declared above ':bugId' so Nest
+   * matches it first; a test checks `dashboard` is never read as an id.
+   */
+  @Get('dashboard')
+  @UseGuards(ProjectRoleGuard)
+  @RequireProjectRole('Viewer')
+  async dashboard(
+    @Param('projectId') projectId: string,
+    @Query('tz') tz: unknown,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<BugDashboardData> {
+    const workspaceId = await resolveProjectWorkspaceId(this.prisma, request.auth!.userId, projectId);
+    return withTenantContext(this.prisma, workspaceId, (tx) => loadBugDashboard(tx, projectId, tz));
+  }
+
   @Get(':bugId')
   @UseGuards(ProjectRoleGuard)
   @RequireProjectRole('Viewer')
@@ -187,6 +205,11 @@ export class BugsController {
 
       const hasDescription = input.description !== undefined;
       const hasSteps = input.stepsToReproduce !== undefined;
+      // The resolution date (PRD §2.9, specs/bug-tracking): set on entering the resolved
+      // set, kept while moving within it, cleared on leaving it.
+      const nextStatus = input.status ?? current.status;
+      const wasResolved = isResolvedStatus(current.status);
+      const isResolved = isResolvedStatus(nextStatus);
       await tx.$executeRaw`
         UPDATE bug SET
           title = COALESCE(${input.title ?? null}, title),
@@ -194,6 +217,7 @@ export class BugsController {
           status = COALESCE(${input.status ?? null}, status),
           description = CASE WHEN ${hasDescription} THEN ${input.description ?? null} ELSE description END,
           steps_to_reproduce = CASE WHEN ${hasSteps} THEN ${input.stepsToReproduce ?? null} ELSE steps_to_reproduce END,
+          resolved_at = CASE WHEN ${!isResolved} THEN NULL WHEN ${!wasResolved} THEN now() ELSE resolved_at END,
           updated_at = now()
         WHERE id = ${bugId}::uuid
       `;

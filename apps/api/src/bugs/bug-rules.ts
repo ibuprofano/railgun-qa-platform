@@ -7,6 +7,14 @@ export type BugStatus = 'Open' | 'InProgress' | 'Resolved' | 'Closed' | 'WontFix
 export type BugSeverity = 'Critical' | 'High' | 'Medium' | 'Low';
 
 export const BUG_STATUSES: BugStatus[] = ['Open', 'InProgress', 'Resolved', 'Closed', 'WontFix'];
+
+/** Statuses that count as resolved (PRD §6.12.1): entering one sets the resolution date. */
+export const RESOLVED_STATUSES: readonly BugStatus[] = ['Resolved', 'Closed', 'WontFix'];
+
+export function isResolvedStatus(status: BugStatus): boolean {
+  return RESOLVED_STATUSES.includes(status);
+}
+
 export const BUG_SEVERITIES: BugSeverity[] = ['Critical', 'High', 'Medium', 'Low'];
 
 /** Severity given to auto-created bugs (ADR 0013 decision 2). */

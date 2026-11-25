@@ -10,7 +10,8 @@ export const LIVE_CHANNEL = 'railgun_live';
  */
 export type LiveEvent =
   | { type: 'execution.changed'; workspaceId: string; projectId: string; executionId: string }
-  | { type: 'run.bugs.changed'; workspaceId: string; projectId: string; executionId: string; runId: string };
+  | { type: 'run.bugs.changed'; workspaceId: string; projectId: string; executionId: string; runId: string }
+  | { type: 'report.changed'; workspaceId: string; projectId: string; reportId: string };
 
 /**
  * Queues a live event on the caller's transaction. Postgres delivers a NOTIFY only
@@ -51,6 +52,13 @@ export function emitRunBugsChanged(
   });
 }
 
+/** The ids each event type must carry (report-pipeline design.md decision 8). */
+const REQUIRED_IDS: Record<LiveEvent['type'], readonly string[]> = {
+  'execution.changed': ['workspaceId', 'projectId', 'executionId'],
+  'run.bugs.changed': ['workspaceId', 'projectId', 'executionId', 'runId'],
+  'report.changed': ['workspaceId', 'projectId', 'reportId'],
+};
+
 /** Parses a notification payload, or returns null for anything that isn't a live event. */
 export function parseLiveEvent(payload: string | undefined): LiveEvent | null {
   if (!payload) {
@@ -58,17 +66,12 @@ export function parseLiveEvent(payload: string | undefined): LiveEvent | null {
   }
   try {
     const value = JSON.parse(payload) as Record<string, unknown>;
-    const ids = ['workspaceId', 'projectId', 'executionId'] as const;
-    if (!ids.every((key) => typeof value[key] === 'string')) {
+    const type = value.type;
+    if (typeof type !== 'string' || !Object.prototype.hasOwnProperty.call(REQUIRED_IDS, type)) {
       return null;
     }
-    if (value.type === 'execution.changed') {
-      return value as LiveEvent;
-    }
-    if (value.type === 'run.bugs.changed' && typeof value.runId === 'string') {
-      return value as LiveEvent;
-    }
-    return null;
+    const ids = REQUIRED_IDS[type as LiveEvent['type']];
+    return ids.every((key) => typeof value[key] === 'string') ? (value as LiveEvent) : null;
   } catch {
     return null;
   }

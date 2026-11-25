@@ -8,12 +8,14 @@ import { canDeleteBug, canEditBug } from '../../lib/bug-permissions';
 import { BugList } from './bug-list';
 import { BugDetail } from './bug-detail';
 import { BugFormDialog } from './bug-form-dialog';
+import { BugDashboard } from './bug-dashboard';
 
 /** Query-string key holding the selected bug, so other screens can link to one. */
 export const SELECTED_BUG_PARAM = 'bug';
 
 /**
- * PRD §6.4.1 split layout: list on the left, the selected bug on the right. Uses
+ * PRD §6.4.1 split layout: list on the left, the selected bug on the right, or the
+ * dashboard when none is selected (PRD §6.4.4). Uses
  * useSearchParams, so the page wraps it in <Suspense> (Next 16 docs).
  */
 export function BugsScreen() {
@@ -51,6 +53,8 @@ export function BugsScreen() {
           canCreate={canEditBug(role)}
           canDeleteTags={canDeleteBug(role)}
           onCreateClick={() => setCreating(true)}
+          dashboardShown={selectedId === null}
+          onShowDashboard={() => select(null)}
         />
         <div className="min-h-0 overflow-y-auto">
           {selectedId ? (
@@ -62,7 +66,7 @@ export function BugsScreen() {
               onDeleted={() => select(null)}
             />
           ) : (
-            <p className="p-6 text-sm text-muted-foreground">Select a bug to see its details.</p>
+            <BugDashboard projectId={projectId} onOpenBug={select} />
           )}
         </div>
         <BugFormDialog

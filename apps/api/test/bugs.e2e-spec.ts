@@ -208,6 +208,24 @@ describe('bugs (e2e, specs/bug-tracking)', () => {
       expect(entries.map((e) => e.details.changes.status)).toContainEqual({ from: 'Closed', to: 'Open' });
     });
 
+    it('records the resolution date on entering the resolved set, keeps it within, clears it on reopening', async () => {
+      const s = await setUp('Bug-ResolvedAt', { started: false });
+      const bug = await file(s, s.contributor, { title: 'X', severity: 'Low' });
+      expect(bug.body.resolvedAt).toBeNull();
+      const url = `${bugs(s)}/${bug.body.id}`;
+      const patch = (body: Record<string, unknown>) => api().patch(url).set(as(s.contributor)).send(body);
+
+      const before = Date.now();
+      const resolved = (await patch({ status: 'Resolved' })).body.resolvedAt as string;
+      expect(new Date(resolved).getTime()).toBeGreaterThanOrEqual(before - 1000);
+      expect((await patch({ status: 'Closed' })).body.resolvedAt).toBe(resolved);
+      expect((await patch({ status: 'WontFix' })).body.resolvedAt).toBe(resolved);
+      expect((await patch({ title: 'Renamed' })).body.resolvedAt).toBe(resolved);
+      expect((await patch({ status: 'Open' })).body.resolvedAt).toBeNull();
+      expect((await patch({ status: 'InProgress' })).body.resolvedAt).toBeNull();
+      expect((await api().get(url).set(as(s.viewer))).body.resolvedAt).toBeNull();
+    });
+
     it('rejects an unknown status (400) and a Viewer (403), leaving the bug unchanged', async () => {
       const s = await setUp('Bug-EditInvalid', { started: false });
       const bug = await file(s, s.contributor, { title: 'X', severity: 'Low' });
@@ -324,6 +342,7 @@ describe('bugs (e2e, specs/bug-tracking)', () => {
         autoCreated: true,
         reporterName: 'Contributor User',
         gherkinSnapshot: 'Given Case 1',
+        resolvedAt: null,
       });
     });
 

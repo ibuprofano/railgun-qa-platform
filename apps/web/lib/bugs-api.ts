@@ -1,4 +1,5 @@
 import type { ApiClient } from './api-client';
+import type { BugDashboardData } from '@railgun-qa/reporting';
 import type { RunOutcome } from './executions-api';
 
 export type BugStatus = 'Open' | 'InProgress' | 'Resolved' | 'Closed' | 'WontFix';
@@ -19,6 +20,8 @@ export interface Bug {
   autoCreated: boolean;
   createdAt: string;
   updatedAt: string;
+  /** When it entered Resolved, Closed or Won't Fix (PRD §2.9); null while unresolved. */
+  resolvedAt: string | null;
   /** The execution attempt it was found in (ADR 0020); null if never tied to a run. */
   attempt?: number | null;
   run: {
@@ -71,6 +74,14 @@ export function listBugs(client: ApiClient, projectId: string, testRunId?: strin
   return client.request(testRunId ? `${base(projectId)}?testRunId=${testRunId}` : base(projectId));
 }
 
+/**
+ * The Bugs dashboard's rows (specs/bug-metrics): every live bug, dated in `timeZone`, the
+ * tags they carry and the database clock. The browser builds the figures from them.
+ */
+export function getBugDashboard(client: ApiClient, projectId: string, timeZone: string): Promise<BugDashboardData> {
+  return client.request(`${base(projectId)}/dashboard?tz=${encodeURIComponent(timeZone)}`);
+}
+
 export function getBug(client: ApiClient, projectId: string, bugId: string): Promise<Bug> {
   return client.request(`${base(projectId)}/${bugId}`);
 }
@@ -105,4 +116,9 @@ export const bugKeys = {
   forRun: (projectId: string, runId: string) => ['projects', projectId, 'bugs', 'run', runId] as const,
   /** Prefix of every per-run bug list. */
   allForRuns: (projectId: string) => ['projects', projectId, 'bugs', 'run'] as const,
+  /**
+   * Deliberately not under `all`: live bug events invalidate `all`, and the dashboard only
+   * needs fresh data when it is shown (bugs-dashboard design.md decision 6).
+   */
+  dashboard: (projectId: string, timeZone: string) => ['projects', projectId, 'bugs-dashboard', timeZone] as const,
 };
