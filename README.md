@@ -53,7 +53,7 @@ A monorepo (npm workspaces) with:
 
 Each choice is recorded in an ADR under [docs/adr/](docs/adr/).
 
-## Reviewing the submission
+## Run it locally
 
 The Clerk keys of the review app and a demo login are sent privately, with the submission. With them, and Node.js ≥ 22.18 and Docker running:
 
@@ -62,35 +62,6 @@ The Clerk keys of the review app and a demo login are sent privately, with the s
 3. `npm run dev`
 4. Open http://localhost:3000 and sign in as the demo user. If Clerk asks for a verification code, it's `424242`: the demo email is a Clerk test address (`+clerk_test`), so no email is sent and that code always works.
 5. Load the demo data: `npm run db:seed -w apps/api -- --email <demo user's email>`, then reload the page.
-
-## Run it locally
-
-Requirements:
-
-- Node.js ≥ 22.18
-- Docker, running
-- a Clerk application (a development one is enough), for its publishable and secret keys
-
-```bash
-npm install
-npm run setup   # asks for your two Clerk keys once, then does the rest
-npm run dev     # API on :3001, web on :3000, background worker
-```
-
-`npm run setup`:
-
-- starts Postgres on localhost:5433 with the database roles
-- writes `apps/api/.env` and `apps/web/.env.local`, and generates `SECRETS_MASTER_KEY`. It never replaces the key once set: stored passwords are encrypted under it.
-- applies the migrations and checks RLS coverage
-- downloads and verifies the report fonts
-
-It's safe to run again: it keeps every value already set and skips what's done. It only migrates an empty database; see [CLAUDE.md](CLAUDE.md) for adding newer migrations to an existing one.
-
-Sign up at http://localhost:3000. Your first sign-in creates your workspace and project. Then, for demo data:
-
-```bash
-npm run db:seed -w apps/api -- --email you@example.com
-```
 
 To check quality, run `npm run lint`, `npm run typecheck` and `npm test -w apps/api|apps/worker|apps/web|packages/reporting`. The API and worker tests use the docker-compose database, and the API tests also need `SECRETS_MASTER_KEY` set in the shell, since tests don't read `.env`.
 
